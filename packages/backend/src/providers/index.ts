@@ -1,4 +1,4 @@
-import type { Notification, Provider, ProviderType } from '@prisma/client';
+import type { Notification, Provider } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { renderTemplate } from '../lib/template.js';
@@ -11,7 +11,8 @@ import { mqttAdapter } from './mqtt.js';
 
 type Adapter = (config: Record<string, unknown>, notification: Notification) => Promise<void>;
 
-const ADAPTERS: Partial<Record<ProviderType, Adapter>> = {
+// Use string keys instead of ProviderType enum (schema uses plain String now)
+const ADAPTERS: Record<string, Adapter> = {
   NTFY:     ntfyAdapter,
   TELEGRAM: telegramAdapter,
   DISCORD:  discordAdapter,
@@ -34,7 +35,6 @@ export async function dispatchToProvider(
   const config = JSON.parse(provider.config) as Record<string, unknown>;
 
   try {
-    // Apply template if configured
     if (config.titleTemplate) notification = { ...notification, title:   renderTemplate(String(config.titleTemplate), notification) };
     if (config.bodyTemplate)  notification = { ...notification, message: renderTemplate(String(config.bodyTemplate),  notification) };
 
@@ -57,7 +57,7 @@ export async function dispatchToProvider(
 }
 
 export async function testProvider(
-  type: ProviderType,
+  type: string,
   config: Record<string, unknown>,
 ): Promise<void> {
   const adapter = ADAPTERS[type];
