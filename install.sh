@@ -50,9 +50,6 @@ DB_NAME="${DB_NAME:-notificationhub}"
 DB_USER="${DB_USER:-notificationhub}"
 DB_PASS="${DB_PASS:-}"
 INSTALL_MARIADB="${INSTALL_MARIADB:-1}"
-PRISMA_VERSION="5.22.0"
-TS_VERSION="5.7.3"
-TSX_VERSION="4.19.2"
 
 if [[ -t 0 && -z "${DB_TYPE_SET:-}" ]]; then
   echo; echo -e "${BOLD}Database Backend${NC}"
@@ -181,35 +178,25 @@ fi
 
 load_env "$ENV_FILE"
 
-# ──── 8. npm install
-step "Installing npm dependencies"
+# ──── 8. Clean install – wipe node_modules first to prevent any audit-fix pollution
+step "Installing npm dependencies (clean)"
 cd "$INSTALL_DIR"
+# Remove all node_modules to guarantee a pristine install from package.json only
+rm -rf node_modules packages/backend/node_modules packages/frontend/node_modules
 npm install --legacy-peer-deps --quiet
 ok "Dependencies installed."
 
-# ──── 8b. Explicitly install all build-critical tools at pinned versions
-# npm workspaces + audit fix can leave these missing or at wrong versions.
-step "Pinning build tools (prisma, typescript, tsx)"
-cd "$INSTALL_DIR"
-npm install --no-save --legacy-peer-deps \
-  "prisma@${PRISMA_VERSION}" \
-  "@prisma/client@${PRISMA_VERSION}" \
-  "typescript@${TS_VERSION}" \
-  "tsx@${TSX_VERSION}" \
-  --quiet
-ok "Build tools pinned."
-
-# Absolute paths – no PATH manipulation, no relative paths, no surprises
+# ──── Verify critical binaries exist in root node_modules/.bin (workspace hoisting)
 PRISMA_BIN="${INSTALL_DIR}/node_modules/.bin/prisma"
 TSC_BIN="${INSTALL_DIR}/node_modules/.bin/tsc"
 TSX_BIN="${INSTALL_DIR}/node_modules/.bin/tsx"
+VITE_BIN="${INSTALL_DIR}/node_modules/.bin/vite"
 
-[[ -x "$PRISMA_BIN" ]] || die "prisma not found at ${PRISMA_BIN}"
-[[ -x "$TSC_BIN"    ]] || die "tsc not found at ${TSC_BIN}"
-[[ -x "$TSX_BIN"    ]] || die "tsx not found at ${TSX_BIN}"
-ok "All build tools verified."
-info "tsc:    $("${TSC_BIN}" --version)"
-info "Prisma: $("${PRISMA_BIN}" --version 2>/dev/null | head -1)"
+[[ -x "$PRISMA_BIN" ]] || die "prisma not found at ${PRISMA_BIN} – check packages/backend/package.json"
+[[ -x "$TSC_BIN"    ]] || die "tsc not found at ${TSC_BIN} – check root package.json devDependencies"
+[[ -x "$TSX_BIN"    ]] || die "tsx not found at ${TSX_BIN} – check root package.json devDependencies"
+[[ -x "$VITE_BIN"   ]] || die "vite not found at ${VITE_BIN} – check packages/frontend/package.json"
+ok "All build tools verified: tsc $("${TSC_BIN}" --version), Prisma $("${PRISMA_BIN}" --version 2>/dev/null | head -1)."
 
 # ──── 9. Select correct Prisma schema
 step "Selecting Prisma schema for ${DB_TYPE}"
@@ -229,7 +216,7 @@ cd "${INSTALL_DIR}/packages/backend"
 "${PRISMA_BIN}" generate
 ok "Prisma client generated."
 
-# ──── 11. Build – invoke tsc/vite directly with absolute paths, bypass npm run
+# ──── 11. Build with absolute binary paths
 step "Building backend"
 cd "${INSTALL_DIR}/packages/backend"
 "${TSC_BIN}" -p tsconfig.json
@@ -237,9 +224,7 @@ ok "Backend built."
 
 step "Building frontend"
 cd "${INSTALL_DIR}/packages/frontend"
-# vite is also hoisted to root node_modules/.bin
-VITE_BIN="${INSTALL_DIR}/node_modules/.bin/vite"
-[[ -x "$VITE_BIN" ]] || die "vite not found at ${VITE_BIN}"
+"${TSC_BIN}" -p tsconfig.json --noEmit
 "${VITE_BIN}" build
 ok "Frontend built."
 
