@@ -13,7 +13,6 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 die()   { echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
 step()  { echo -e "\n${BOLD}${CYAN}==> $*${NC}"; }
 
-# Safe .env loader
 load_env() {
   local file="$1"
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -52,6 +51,8 @@ DB_USER="${DB_USER:-notificationhub}"
 DB_PASS="${DB_PASS:-}"
 INSTALL_MARIADB="${INSTALL_MARIADB:-1}"
 PRISMA_VERSION="5.22.0"
+TS_VERSION="5.7.3"
+TSX_VERSION="4.19.2"
 
 if [[ -t 0 && -z "${DB_TYPE_SET:-}" ]]; then
   echo; echo -e "${BOLD}Database Backend${NC}"
@@ -180,37 +181,35 @@ fi
 
 load_env "$ENV_FILE"
 
-# ──── 8. npm install + enforce prisma v5 in root (workspace hoisting puts all binaries there)
+# ──── 8. npm install
 step "Installing npm dependencies"
 cd "$INSTALL_DIR"
-if [[ -d node_modules/prisma ]]; then
-  _cur_prisma=$(node -e "try{process.stdout.write(require('./node_modules/prisma/package.json').version)}catch(e){}" 2>/dev/null || true)
-  if [[ "$_cur_prisma" != 5.* ]]; then
-    warn "Found incompatible prisma@${_cur_prisma} in root node_modules, removing..."
-    rm -rf node_modules/prisma node_modules/@prisma node_modules/.bin/prisma
-  fi
-fi
 npm install --legacy-peer-deps --quiet
 ok "Dependencies installed."
 
-# ──── 8b. Enforce prisma@5
-step "Enforcing Prisma ${PRISMA_VERSION}"
+# ──── 8b. Explicitly install all build-critical tools at pinned versions
+# npm workspaces + audit fix can leave these missing or at wrong versions.
+step "Pinning build tools (prisma, typescript, tsx)"
 cd "$INSTALL_DIR"
-_installed_prisma=$(node -e "try{process.stdout.write(require('./node_modules/prisma/package.json').version)}catch(e){process.stdout.write('none')}" 2>/dev/null || echo "none")
-if [[ "$_installed_prisma" != 5.* ]]; then
-  info "Prisma '${_installed_prisma}' detected, installing prisma@${PRISMA_VERSION}..."
-  npm install --no-save --legacy-peer-deps "prisma@${PRISMA_VERSION}" "@prisma/client@${PRISMA_VERSION}" --quiet
-else
-  info "Prisma ${_installed_prisma} already correct."
-fi
+npm install --no-save --legacy-peer-deps \
+  "prisma@${PRISMA_VERSION}" \
+  "@prisma/client@${PRISMA_VERSION}" \
+  "typescript@${TS_VERSION}" \
+  "tsx@${TSX_VERSION}" \
+  --quiet
+ok "Build tools pinned."
 
-# Workspace hoisting: all binaries (prisma, tsc, vite, tsx) land in root node_modules/.bin/
-# Prepend it to PATH so npm run scripts inside workspace packages find them.
-export PATH="${INSTALL_DIR}/node_modules/.bin:${PATH}"
-
+# Absolute paths – no PATH manipulation, no relative paths, no surprises
 PRISMA_BIN="${INSTALL_DIR}/node_modules/.bin/prisma"
-[[ -x "$PRISMA_BIN" ]] || die "prisma binary not found at ${PRISMA_BIN} after npm install."
-ok "Using Prisma $("${PRISMA_BIN}" --version 2>/dev/null | head -1 || echo ${PRISMA_VERSION})."
+TSC_BIN="${INSTALL_DIR}/node_modules/.bin/tsc"
+TSX_BIN="${INSTALL_DIR}/node_modules/.bin/tsx"
+
+[[ -x "$PRISMA_BIN" ]] || die "prisma not found at ${PRISMA_BIN}"
+[[ -x "$TSC_BIN"    ]] || die "tsc not found at ${TSC_BIN}"
+[[ -x "$TSX_BIN"    ]] || die "tsx not found at ${TSX_BIN}"
+ok "All build tools verified."
+info "tsc:    $("${TSC_BIN}" --version)"
+info "Prisma: $("${PRISMA_BIN}" --version 2>/dev/null | head -1)"
 
 # ──── 9. Select correct Prisma schema
 step "Selecting Prisma schema for ${DB_TYPE}"
@@ -230,12 +229,19 @@ cd "${INSTALL_DIR}/packages/backend"
 "${PRISMA_BIN}" generate
 ok "Prisma client generated."
 
-# ──── 11. Build
-step "Building backend + frontend"
-cd "$INSTALL_DIR"
-npm run build --workspace=packages/backend  --quiet
-npm run build --workspace=packages/frontend --quiet
-ok "Build complete."
+# ──── 11. Build – invoke tsc/vite directly with absolute paths, bypass npm run
+step "Building backend"
+cd "${INSTALL_DIR}/packages/backend"
+"${TSC_BIN}" -p tsconfig.json
+ok "Backend built."
+
+step "Building frontend"
+cd "${INSTALL_DIR}/packages/frontend"
+# vite is also hoisted to root node_modules/.bin
+VITE_BIN="${INSTALL_DIR}/node_modules/.bin/vite"
+[[ -x "$VITE_BIN" ]] || die "vite not found at ${VITE_BIN}"
+"${VITE_BIN}" build
+ok "Frontend built."
 
 # ──── 12. Prisma migrate + seed
 step "Running database migrations"
