@@ -12,10 +12,10 @@ export const notificationsRoutes: FastifyPluginAsync = async (app) => {
     const skip  = (page - 1) * limit;
 
     const where: any = {};
-    if (q.priority)    where.priority    = q.priority;
-    if (q.source)      where.source      = { contains: q.source };
-    if (q.hostname)    where.hostname    = { contains: q.hostname };
-    if (q.incidentId)  where.incidentId  = q.incidentId;
+    if (q.priority)   where.priority  = q.priority;
+    if (q.source)     where.source    = { contains: q.source };
+    if (q.hostname)   where.hostname  = { contains: q.hostname };
+    if (q.incidentId) where.incidentId = q.incidentId;
     if (q.acknowledged === 'true')  where.acknowledgedAt = { not: null };
     if (q.acknowledged === 'false') where.acknowledgedAt = null;
     if (q.search) {
@@ -30,10 +30,7 @@ export const notificationsRoutes: FastifyPluginAsync = async (app) => {
       if (q.since) where.timestamp.gte = new Date(q.since);
       if (q.until) where.timestamp.lte = new Date(q.until);
     }
-    if (q.tags) {
-      // Tags stored as JSON string – use contains for simple matching
-      where.tags = { contains: q.tags };
-    }
+    if (q.tags) where.tags = { contains: q.tags };
 
     const [total, items] = await Promise.all([
       prisma.notification.count({ where }),
@@ -48,7 +45,8 @@ export const notificationsRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ items, total, page, limit, pages: Math.ceil(total / limit) });
   });
 
-  /** GET /api/v1/notifications/stats/summary */
+  /** GET /api/v1/notifications/stats/summary
+   *  MUST be before /:id so Fastify does not swallow "stats" as an id param. */
   app.get('/stats/summary', { onRequest: auth }, async (_req, reply) => {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -67,6 +65,30 @@ export const notificationsRoutes: FastifyPluginAsync = async (app) => {
 
     return reply.send({ today, week, critical, warnings, unacknowledged, byPriority, bySource });
   });
+
+  /** POST /api/v1/notifications/bulk/acknowledge
+   *  MUST be before /:id/acknowledge so "bulk" is not treated as an id. */
+  app.post('/bulk/acknowledge', { onRequest: auth }, async (req, reply) => {
+    const { ids } = req.body as { ids: string[] };
+    const { sub } = req.user as { sub: string };
+    const result = await prisma.notification.updateMany({
+      where: { id: { in: ids } },
+      data: { acknowledgedAt: new Date(), acknowledgedById: sub },
+    });
+    return reply.send({ updated: result.count });
+  });
+
+  /** DELETE /api/v1/notifications/bulk
+   *  MUST be before /:id so "bulk" is not treated as an id. */
+  app.delete('/bulk', { onRequest: auth }, async (req, reply) => {
+    const { ids } = req.body as { ids: string[] };
+    const result = await prisma.notification.deleteMany({ where: { id: { in: ids } } });
+    return reply.send({ deleted: result.count });
+  });
+
+  // ───────────────────────────────────────────────────────
+  //  Dynamic routes below – these MUST come after all static paths
+  // ───────────────────────────────────────────────────────
 
   /** GET /api/v1/notifications/:id */
   app.get('/:id', { onRequest: auth }, async (req, reply) => {
@@ -90,28 +112,10 @@ export const notificationsRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(updated);
   });
 
-  /** POST /api/v1/notifications/bulk/acknowledge */
-  app.post('/bulk/acknowledge', { onRequest: auth }, async (req, reply) => {
-    const { ids } = req.body as { ids: string[] };
-    const { sub } = req.user as { sub: string };
-    const result = await prisma.notification.updateMany({
-      where: { id: { in: ids } },
-      data: { acknowledgedAt: new Date(), acknowledgedById: sub },
-    });
-    return reply.send({ updated: result.count });
-  });
-
   /** DELETE /api/v1/notifications/:id */
   app.delete('/:id', { onRequest: auth }, async (req, reply) => {
     const { id } = req.params as { id: string };
     await prisma.notification.delete({ where: { id } });
     return reply.status(204).send();
-  });
-
-  /** DELETE /api/v1/notifications/bulk – delete by IDs */
-  app.delete('/bulk', { onRequest: auth }, async (req, reply) => {
-    const { ids } = req.body as { ids: string[] };
-    const result = await prisma.notification.deleteMany({ where: { id: { in: ids } } });
-    return reply.send({ deleted: result.count });
   });
 };
