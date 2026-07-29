@@ -44,7 +44,7 @@ fi
 INSTALL_DIR="/opt/notificationhub"
 DATA_DIR="/var/lib/notificationhub"
 SERVICE_USER="notificationhub"
-PORT="${PORT:-3003}"
+PORT="${PORT:-3000}"
 NODE_MAJOR=22
 REPO_URL="https://github.com/TobiasKWF/notificationhub.git"
 GIT_BRANCH="${GIT_BRANCH:-main}"
@@ -180,21 +180,17 @@ if [[ ! -f "$ENV_FILE" ]]; then
   ADMIN_PASS_GENERATED="$ADMIN_PASS"
 else
   info ".env already exists – skipping."
-  ADMIN_PASS_GENERATED=$(awk -F= '/^ADMIN_PASSWORD=/{sub(/^[^=]*=/,""); print; exit}' "${ENV_FILE}" | sed 's/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')
+  ADMIN_PASS_GENERATED=$(awk -F= '/^ADMIN_PASSWORD=/{sub(/^[^=]*=/,""); print; exit}' "${ENV_FILE}" | sed 's/^"//' | sed 's/"$//')
 fi
 
 load_env "$ENV_FILE"
 
 # ──── 8. Projekt-Dependencies
-# Schritt 8 installiert keine globalen Build-Tools mehr – npm run build nutzt
-# das lokale node_modules/.bin jedes Packages mit korrektem PATH.
 step "Installing all project dependencies"
 cd "$INSTALL_DIR"
 rm -rf node_modules packages/backend/node_modules packages/frontend/node_modules
 npm install --legacy-peer-deps 2>&1 | grep -v '^npm warn' || true
 
-# devDependencies explizit in Backend und Frontend installieren.
-# npm-Workspaces hoisten devDeps von Sub-Packages nicht immer zuverlaessig.
 cd "${INSTALL_DIR}/packages/backend"
 npm install --legacy-peer-deps --include=dev 2>&1 | grep -v '^npm warn' || true
 
@@ -205,7 +201,6 @@ cd "$INSTALL_DIR"
 ok "All dependencies installed."
 
 # ──── 8b. Prisma binary finden
-# Nach dem echten npm install liegt prisma im Workspace oder Backend.
 PRISMA_BIN=$(
   find_binary "prisma" \
     "${INSTALL_DIR}/node_modules/.bin/prisma" \
@@ -232,8 +227,6 @@ cd "${INSTALL_DIR}/packages/backend"
 ok "Prisma client generated."
 
 # ──── 11. Build Backend
-# npm run build setzt PATH=$package/node_modules/.bin:$workspace/node_modules/.bin
-# Damit findet tsc das lokale typescript + alle @types korrekt.
 step "Building backend"
 cd "${INSTALL_DIR}/packages/backend"
 npm run build 2>&1
@@ -250,7 +243,7 @@ step "Running database migrations"
 cd "${INSTALL_DIR}/packages/backend"
 "${PRISMA_BIN}" migrate deploy
 ok "Migrations applied."
-if "${PRISMA_BIN}" db seed 2>&1 | grep -q 'Admin already exists'; then
+if "${PRISMA_BIN}" db seed 2>&1 | grep -q 'already exists'; then
   info "Admin user already exists – skipping seed."
 else
   ok "Database seeded."
@@ -267,6 +260,8 @@ Description=NotificationHub – Notification Routing Engine
 Documentation=https://github.com/TobiasKWF/notificationhub
 After=${_db_after}
 Requires=network.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
@@ -277,8 +272,6 @@ EnvironmentFile=${ENV_FILE}
 ExecStart=/usr/bin/node ${INSTALL_DIR}/packages/backend/dist/index.js
 Restart=on-failure
 RestartSec=5
-StartLimitBurst=5
-StartLimitIntervalSec=60
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=notificationhub
