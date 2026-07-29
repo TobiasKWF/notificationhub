@@ -183,7 +183,6 @@ load_env "$ENV_FILE"
 # ──── 8. npm install + enforce prisma v5 in root (workspace hoisting puts all binaries there)
 step "Installing npm dependencies"
 cd "$INSTALL_DIR"
-# Remove any wrong prisma version that may have been installed by npm audit fix --force
 if [[ -d node_modules/prisma ]]; then
   _cur_prisma=$(node -e "try{process.stdout.write(require('./node_modules/prisma/package.json').version)}catch(e){}" 2>/dev/null || true)
   if [[ "$_cur_prisma" != 5.* ]]; then
@@ -194,18 +193,21 @@ fi
 npm install --legacy-peer-deps --quiet
 ok "Dependencies installed."
 
-# ──── 8b. Enforce prisma@5 in root node_modules (workspace binary is always hoisted here)
+# ──── 8b. Enforce prisma@5
 step "Enforcing Prisma ${PRISMA_VERSION}"
 cd "$INSTALL_DIR"
 _installed_prisma=$(node -e "try{process.stdout.write(require('./node_modules/prisma/package.json').version)}catch(e){process.stdout.write('none')}" 2>/dev/null || echo "none")
 if [[ "$_installed_prisma" != 5.* ]]; then
-  info "Prisma version '${_installed_prisma}' detected, installing prisma@${PRISMA_VERSION}..."
+  info "Prisma '${_installed_prisma}' detected, installing prisma@${PRISMA_VERSION}..."
   npm install --no-save --legacy-peer-deps "prisma@${PRISMA_VERSION}" "@prisma/client@${PRISMA_VERSION}" --quiet
 else
   info "Prisma ${_installed_prisma} already correct."
 fi
 
-# Workspace hoisting: binary is always in root node_modules/.bin/
+# Workspace hoisting: all binaries (prisma, tsc, vite, tsx) land in root node_modules/.bin/
+# Prepend it to PATH so npm run scripts inside workspace packages find them.
+export PATH="${INSTALL_DIR}/node_modules/.bin:${PATH}"
+
 PRISMA_BIN="${INSTALL_DIR}/node_modules/.bin/prisma"
 [[ -x "$PRISMA_BIN" ]] || die "prisma binary not found at ${PRISMA_BIN} after npm install."
 ok "Using Prisma $("${PRISMA_BIN}" --version 2>/dev/null | head -1 || echo ${PRISMA_VERSION})."
