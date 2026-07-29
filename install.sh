@@ -72,7 +72,7 @@ if [[ "$DB_TYPE" == "mariadb" && -t 0 ]]; then
     read -rp "  MariaDB host   [${DB_HOST}]: "  _h;  [[ -n "$_h" ]] && DB_HOST="$_h"
     read -rp "  MariaDB port   [${DB_PORT}]: "  _p;  [[ -n "$_p" ]] && DB_PORT="$_p"
     read -rp "  Database name  [${DB_NAME}]: "  _n;  [[ -n "$_n" ]] && DB_NAME="$_n"
-    read -rp "  DB user        [${DB_USER}]: "  _u;  [[ -n "$_h" ]] && DB_USER="$_u"
+    read -rp "  DB user        [${DB_USER}]: "  _u;  [[ -n "$_u" ]] && DB_USER="$_u"
     read -rsp "  DB password (leave blank to generate): " _pw; echo
     [[ -n "$_pw" ]] && DB_PASS="$_pw"
   fi
@@ -179,31 +179,58 @@ fi
 
 load_env "$ENV_FILE"
 
-# ──── 8. Globale Build-Tools installieren (umgeht alle Workspace/Peer-Konflikte)
-# typescript und tsx werden global installiert – Peer-Konflikte können das nicht blockieren.
-# Prisma wird lokal erzwungen weil es schema-Dateien im Projekt-Verzeichnis braucht.
-step "Installing global build tools (typescript, tsx)"
-npm install -g typescript tsx
-ok "typescript $(tsc --version) und tsx global installiert."
+# ──── 8. typescript + tsx in /root/node_modules vorinstallieren
+# npm installiert auf diesem System immer nach /root/node_modules (kein globaler Prefix).
+# Das passiert BEVOR der Workspace-Install, damit Hoisting keinen Peer-Konflikt abwirft.
+step "Pre-installing typescript and tsx into root node_modules"
+cd /root
+npm install typescript tsx 2>&1 | grep -v '^npm warn' || true
 
-# ──── 9. npm install (sauberer Workspace-Install)
+# Pfade nach /root/node_modules sind jetzt garantiert vorhanden
+ROOT_TSC="/root/node_modules/.bin/tsc"
+ROOT_TSX="/root/node_modules/.bin/tsx"
+[[ -x "$ROOT_TSC" ]] || die "typescript konnte nicht in /root/node_modules installiert werden"
+[[ -x "$ROOT_TSX" ]] || die "tsx konnte nicht in /root/node_modules installiert werden"
+ok "typescript $($ROOT_TSC --version) und tsx in /root/node_modules verfügbar."
+
+# ──── 9. Projekt-Dependencies installieren
 step "Installing project dependencies (clean)"
 cd "$INSTALL_DIR"
 rm -rf node_modules packages/backend/node_modules packages/frontend/node_modules
 npm install --legacy-peer-deps
 ok "Project dependencies installed."
 
-# ──── 9b. Prisma lokal erzwingen (braucht Projekt-Kontext)
+# ──── 9b. Prisma lokal erzwingen
 step "Enforcing Prisma ${PRISMA_VERSION}"
 cd "$INSTALL_DIR"
 npm install --legacy-peer-deps "prisma@${PRISMA_VERSION}" "@prisma/client@${PRISMA_VERSION}"
 ok "Prisma ${PRISMA_VERSION} installed."
 
-# ──── Absolute Pfade für alle Build-Binaries ermitteln
-# tsc und tsx kommen aus dem globalen npm-Prefix, Prisma und Vite aus dem Workspace
-GLOBAL_PREFIX=$(npm prefix -g)
-TSC_BIN="${GLOBAL_PREFIX}/bin/tsc"
-TSX_BIN="${GLOBAL_PREFIX}/bin/tsx"
+# ──── Symlinks: /opt/notificationhub/node_modules/.bin/ → /root/node_modules
+# Pakete möglicherweise durch Workspace-Hoisting vorhanden, sonst Fallback auf /root
+step "Ensuring tsc and tsx symlinks in workspace .bin/"
+BIN_DIR="${INSTALL_DIR}/node_modules/.bin"
+mkdir -p "${BIN_DIR}"
+
+# tsc
+if [[ ! -x "${BIN_DIR}/tsc" ]]; then
+  ln -sf "$ROOT_TSC" "${BIN_DIR}/tsc"
+  info "tsc: Symlink auf ${ROOT_TSC} gesetzt."
+else
+  info "tsc: bereits in ${BIN_DIR} vorhanden."
+fi
+
+# tsx
+if [[ ! -x "${BIN_DIR}/tsx" ]]; then
+  ln -sf "$ROOT_TSX" "${BIN_DIR}/tsx"
+  info "tsx: Symlink auf ${ROOT_TSX} gesetzt."
+else
+  info "tsx: bereits in ${BIN_DIR} vorhanden."
+fi
+
+# ──── Alle Build-Binaries final verifizieren
+TSC_BIN="${BIN_DIR}/tsc"
+TSX_BIN="${BIN_DIR}/tsx"
 PRISMA_BIN="${INSTALL_DIR}/node_modules/.bin/prisma"
 VITE_BIN="${INSTALL_DIR}/node_modules/.bin/vite"
 
@@ -213,18 +240,9 @@ VITE_BIN="${INSTALL_DIR}/node_modules/.bin/vite"
 [[ -x "$VITE_BIN"   ]] || die "vite nicht gefunden unter ${VITE_BIN}"
 
 ok "Alle Build-Tools verifiziert:"
-info "  tsc:    $("${TSC_BIN}" --version)"
-info "  tsx:    $("${TSX_BIN}" --version)"
-info "  prisma: $("${PRISMA_BIN}" --version 2>/dev/null | head -1)"
-info "  vite:   $("${VITE_BIN}" --version)"
-
-# Die Workspace-Scripts rufen ../../node_modules/.bin/tsc auf.
-# Wir legen Symlinks an damit diese relativen Pfade auf die globalen Binaries zeigen.
-BIN_DIR="${INSTALL_DIR}/node_modules/.bin"
-mkdir -p "${BIN_DIR}"
-ln -sf "${TSC_BIN}" "${BIN_DIR}/tsc"
-ln -sf "${TSX_BIN}" "${BIN_DIR}/tsx"
-ok "Symlinks node_modules/.bin/tsc und .bin/tsx gesetzt."
+info "  tsc    → $("${TSC_BIN}" --version)"
+info "  prisma → $("${PRISMA_BIN}" --version 2>/dev/null | head -1)"
+info "  vite   → $("${VITE_BIN}" --version)"
 
 # ──── 10. Prisma schema
 step "Selecting Prisma schema for ${DB_TYPE}"
@@ -244,7 +262,7 @@ cd "${INSTALL_DIR}/packages/backend"
 "${PRISMA_BIN}" generate
 ok "Prisma client generated."
 
-# ──── 12. Build (absolute Pfade, kein npm run)
+# ──── 12. Build
 step "Building backend"
 cd "${INSTALL_DIR}/packages/backend"
 "${TSC_BIN}" -p tsconfig.json
