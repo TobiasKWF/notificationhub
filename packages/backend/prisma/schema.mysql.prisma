@@ -1,7 +1,7 @@
 // NotificationHub – Prisma Schema (MySQL / MariaDB)
 generator client {
   provider      = "prisma-client-js"
-  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
+  binaryTargets = ["native"]
 }
 
 datasource db {
@@ -47,7 +47,7 @@ model Notification {
   title            String
   message          String          @db.Text
   priority         String          @default("INFO")
-  tags             String          @default("[]")   @db.Text
+  tags             String          @default("[]")
   hostname         String?
   externalId       String?
   timestamp        DateTime        @default(now())
@@ -60,7 +60,7 @@ model Notification {
   incidentId       String?
   incident         Incident?       @relation(fields: [incidentId], references: [id])
   routingResults   RoutingResult[]
-  extra            String          @default("{}")   @db.Text
+  extra            String          @default("{}") @db.Text
   @@index([source])
   @@index([priority])
   @@index([timestamp])
@@ -191,7 +191,7 @@ model Template {
 
 model Setting {
   key       String   @id
-  value     String   @db.Text
+  value     String
   updatedAt DateTime @updatedAt
   @@map("settings")
 }
