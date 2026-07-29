@@ -149,6 +149,7 @@ ok "Repository ready at ${INSTALL_DIR}."
 step "Preparing data directory"
 mkdir -p "${DATA_DIR}"
 chown "${SERVICE_USER}:${SERVICE_USER}" "${DATA_DIR}"
+chmod 750 "${DATA_DIR}"
 ok "Data directory: ${DATA_DIR}"
 
 # ──── 7. Environment file
@@ -249,6 +250,19 @@ else
   ok "Database seeded."
 fi
 cd "$INSTALL_DIR"
+
+# ──── 13b. Fix SQLite file ownership
+# migrate + seed run as root, so the .db file is owned by root.
+# The service runs as ${SERVICE_USER} and needs write access.
+if [[ "$DB_TYPE" == "sqlite" ]]; then
+  step "Fixing SQLite file ownership"
+  chown "${SERVICE_USER}:${SERVICE_USER}" "${DATA_DIR}/notificationhub.db" 2>/dev/null || true
+  # Also fix WAL/SHM files created by Prisma
+  chown "${SERVICE_USER}:${SERVICE_USER}" "${DATA_DIR}/notificationhub.db-wal"  2>/dev/null || true
+  chown "${SERVICE_USER}:${SERVICE_USER}" "${DATA_DIR}/notificationhub.db-shm"  2>/dev/null || true
+  chmod 660 "${DATA_DIR}/notificationhub.db"
+  ok "SQLite ownership fixed: ${DATA_DIR}/notificationhub.db → ${SERVICE_USER}"
+fi
 
 # ──── 14. systemd
 step "Installing systemd service"
