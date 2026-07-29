@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import bcrypt from 'bcryptjs';
-import { z } from 'zod';
+import { z, ZodError } from 'zod';
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { auditLog } from '../../lib/audit.js';
@@ -20,22 +20,39 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   /** POST /api/v1/auth/login */
   app.post('/login', async (req, reply) => {
-    const body = LoginSchema.parse(req.body);
-    const user = await prisma.user.findUnique({ where: { email: body.email } });
-    if (!user || !user.isActive) {
-      return reply.status(401).send({ error: 'Invalid credentials' });
+    try {
+      const body = LoginSchema.parse(req.body);
+
+      let user: any;
+      try {
+        user = await prisma.user.findUnique({ where: { email: body.email } });
+      } catch (dbErr: any) {
+        logger.error({ err: dbErr }, 'DB error during login');
+        return reply.status(500).send({ error: 'Database error: ' + (dbErr?.message ?? String(dbErr)) });
+      }
+
+      if (!user || !user.isActive) {
+        return reply.status(401).send({ error: 'Invalid credentials' });
+      }
+
+      const valid = await bcrypt.compare(body.password, user.passwordHash);
+      if (!valid) return reply.status(401).send({ error: 'Invalid credentials' });
+
+      const token = app.jwt.sign({ sub: user.id, email: user.email, role: user.role });
+      logger.info({ userId: user.id }, 'User logged in');
+      auditLog({ userId: user.id, action: 'login', resource: 'auth', ip: req.ip });
+
+      return reply.send({
+        token,
+        user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      });
+    } catch (err: any) {
+      if (err instanceof ZodError) {
+        return reply.status(400).send({ error: 'Invalid request: ' + err.errors.map(e => e.message).join(', ') });
+      }
+      logger.error({ err }, 'Unexpected login error');
+      return reply.status(500).send({ error: err?.message ?? 'Internal Server Error' });
     }
-    const valid = await bcrypt.compare(body.password, user.passwordHash);
-    if (!valid) return reply.status(401).send({ error: 'Invalid credentials' });
-
-    const token = app.jwt.sign({ sub: user.id, email: user.email, role: user.role });
-    logger.info({ userId: user.id }, 'User logged in');
-    auditLog({ userId: user.id, action: 'login', resource: 'auth', ip: req.ip });
-
-    return reply.send({
-      token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
-    });
   });
 
   /** GET /api/v1/auth/me */
