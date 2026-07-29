@@ -72,7 +72,7 @@ if [[ "$DB_TYPE" == "mariadb" && -t 0 ]]; then
     read -rp "  MariaDB host   [${DB_HOST}]: "  _h;  [[ -n "$_h" ]] && DB_HOST="$_h"
     read -rp "  MariaDB port   [${DB_PORT}]: "  _p;  [[ -n "$_p" ]] && DB_PORT="$_p"
     read -rp "  Database name  [${DB_NAME}]: "  _n;  [[ -n "$_n" ]] && DB_NAME="$_n"
-    read -rp "  DB user        [${DB_USER}]: "  _u;  [[ -n "$_u" ]] && DB_USER="$_u"
+    read -rp "  DB user        [${DB_USER}]: "  _u;  [[ -n "$_h" ]] && DB_USER="$_u"
     read -rsp "  DB password (leave blank to generate): " _pw; echo
     [[ -n "$_pw" ]] && DB_PASS="$_pw"
   fi
@@ -179,39 +179,54 @@ fi
 
 load_env "$ENV_FILE"
 
-# ──── 8. npm install (clean slate)
-step "Installing npm dependencies (clean)"
+# ──── 8. Globale Build-Tools installieren (umgeht alle Workspace/Peer-Konflikte)
+# typescript und tsx werden global installiert – Peer-Konflikte können das nicht blockieren.
+# Prisma wird lokal erzwungen weil es schema-Dateien im Projekt-Verzeichnis braucht.
+step "Installing global build tools (typescript, tsx)"
+npm install -g typescript tsx
+ok "typescript $(tsc --version) und tsx global installiert."
+
+# ──── 9. npm install (sauberer Workspace-Install)
+step "Installing project dependencies (clean)"
 cd "$INSTALL_DIR"
-# Wipe all node_modules to prevent poisoning from previous npm audit fix --force runs
 rm -rf node_modules packages/backend/node_modules packages/frontend/node_modules
 npm install --legacy-peer-deps
-ok "Base dependencies installed."
+ok "Project dependencies installed."
 
-# ──── 8b. Explicitly re-install build-critical tools into workspace root
-# npm workspaces can fail to hoist devDependencies when peer conflicts exist.
-# Force-installing directly into the root node_modules guarantees .bin/ symlinks exist.
-step "Ensuring build tools in workspace root"
+# ──── 9b. Prisma lokal erzwingen (braucht Projekt-Kontext)
+step "Enforcing Prisma ${PRISMA_VERSION}"
 cd "$INSTALL_DIR"
-npm install --legacy-peer-deps \
-  "prisma@${PRISMA_VERSION}" \
-  "@prisma/client@${PRISMA_VERSION}" \
-  typescript \
-  tsx
-ok "Build tools installed."
+npm install --legacy-peer-deps "prisma@${PRISMA_VERSION}" "@prisma/client@${PRISMA_VERSION}"
+ok "Prisma ${PRISMA_VERSION} installed."
 
-# ──── Verify all critical binaries
+# ──── Absolute Pfade für alle Build-Binaries ermitteln
+# tsc und tsx kommen aus dem globalen npm-Prefix, Prisma und Vite aus dem Workspace
+GLOBAL_PREFIX=$(npm prefix -g)
+TSC_BIN="${GLOBAL_PREFIX}/bin/tsc"
+TSX_BIN="${GLOBAL_PREFIX}/bin/tsx"
 PRISMA_BIN="${INSTALL_DIR}/node_modules/.bin/prisma"
-TSC_BIN="${INSTALL_DIR}/node_modules/.bin/tsc"
-TSX_BIN="${INSTALL_DIR}/node_modules/.bin/tsx"
 VITE_BIN="${INSTALL_DIR}/node_modules/.bin/vite"
 
-[[ -x "$PRISMA_BIN" ]] || die "prisma fehlt in ${PRISMA_BIN}"
-[[ -x "$TSC_BIN"    ]] || die "tsc fehlt in ${TSC_BIN} – typescript nicht installiert"
-[[ -x "$TSX_BIN"    ]] || die "tsx fehlt in ${TSX_BIN}"
-[[ -x "$VITE_BIN"   ]] || die "vite fehlt in ${VITE_BIN}"
-ok "Build tools OK: tsc $("${TSC_BIN}" --version), Prisma $("${PRISMA_BIN}" --version 2>/dev/null | head -1)"
+[[ -x "$TSC_BIN"    ]] || die "tsc nicht gefunden unter ${TSC_BIN}"
+[[ -x "$TSX_BIN"    ]] || die "tsx nicht gefunden unter ${TSX_BIN}"
+[[ -x "$PRISMA_BIN" ]] || die "prisma nicht gefunden unter ${PRISMA_BIN}"
+[[ -x "$VITE_BIN"   ]] || die "vite nicht gefunden unter ${VITE_BIN}"
 
-# ──── 9. Prisma schema
+ok "Alle Build-Tools verifiziert:"
+info "  tsc:    $("${TSC_BIN}" --version)"
+info "  tsx:    $("${TSX_BIN}" --version)"
+info "  prisma: $("${PRISMA_BIN}" --version 2>/dev/null | head -1)"
+info "  vite:   $("${VITE_BIN}" --version)"
+
+# Die Workspace-Scripts rufen ../../node_modules/.bin/tsc auf.
+# Wir legen Symlinks an damit diese relativen Pfade auf die globalen Binaries zeigen.
+BIN_DIR="${INSTALL_DIR}/node_modules/.bin"
+mkdir -p "${BIN_DIR}"
+ln -sf "${TSC_BIN}" "${BIN_DIR}/tsc"
+ln -sf "${TSX_BIN}" "${BIN_DIR}/tsx"
+ok "Symlinks node_modules/.bin/tsc und .bin/tsx gesetzt."
+
+# ──── 10. Prisma schema
 step "Selecting Prisma schema for ${DB_TYPE}"
 PRISMA_DIR="${INSTALL_DIR}/packages/backend/prisma"
 if [[ "$DB_TYPE" == "mariadb" ]]; then
@@ -223,13 +238,13 @@ else
 fi
 ok "Prisma schema selected."
 
-# ──── 10. Prisma generate
+# ──── 11. Prisma generate
 step "Generating Prisma client"
 cd "${INSTALL_DIR}/packages/backend"
 "${PRISMA_BIN}" generate
 ok "Prisma client generated."
 
-# ──── 11. Build mit absoluten Pfaden (kein npm run, kein PATH)
+# ──── 12. Build (absolute Pfade, kein npm run)
 step "Building backend"
 cd "${INSTALL_DIR}/packages/backend"
 "${TSC_BIN}" -p tsconfig.json
@@ -241,7 +256,7 @@ cd "${INSTALL_DIR}/packages/frontend"
 "${VITE_BIN}" build
 ok "Frontend built."
 
-# ──── 12. DB migrate + seed
+# ──── 13. DB migrate + seed
 step "Running database migrations"
 cd "${INSTALL_DIR}/packages/backend"
 "${PRISMA_BIN}" migrate deploy
@@ -253,7 +268,7 @@ else
 fi
 cd "$INSTALL_DIR"
 
-# ──── 13. systemd
+# ──── 14. systemd
 step "Installing systemd service"
 _db_after="network.target"
 [[ "$DB_TYPE" == "mariadb" && "$INSTALL_MARIADB" == "1" ]] && _db_after="network.target mariadb.service"
@@ -292,7 +307,7 @@ systemctl enable --quiet notificationhub
 systemctl restart notificationhub
 ok "notificationhub.service gestartet."
 
-# ──── 14. nginx
+# ──── 15. nginx
 step "Configuring nginx"
 SERVER_NAME=$(hostname -f 2>/dev/null || echo '_')
 cat > /etc/nginx/sites-available/notificationhub <<EOF
@@ -334,7 +349,7 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t -q && systemctl reload nginx
 ok "nginx konfiguriert."
 
-# ──── 15. Firewall
+# ──── 16. Firewall
 if command -v ufw &>/dev/null; then
   ufw allow 80/tcp &>/dev/null || true
   ufw allow 443/tcp &>/dev/null || true
