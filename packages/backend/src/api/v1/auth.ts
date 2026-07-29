@@ -6,7 +6,10 @@ import { logger } from '../../lib/logger.js';
 import { auditLog } from '../../lib/audit.js';
 
 const LoginSchema = z.object({
-  email:    z.string().email(),
+  // Accept any non-empty string as email so local domains like
+  // 'admin@localhost' or 'user@myserver' are not rejected by Zod's
+  // strict RFC-5322 check (which requires a TLD).
+  email:    z.string().min(1).toLowerCase().trim(),
   password: z.string().min(1),
 });
 
@@ -21,18 +24,13 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   /** POST /api/v1/auth/login */
   app.post('/login', async (req, reply) => {
     try {
-      // Fastify parses JSON automatically when Content-Type: application/json.
-      // If body is still null/string, parse manually as fallback.
       let rawBody: unknown = req.body;
       if (typeof rawBody === 'string') {
         try { rawBody = JSON.parse(rawBody); } catch { /* ignore */ }
       }
       if (rawBody === null || rawBody === undefined) {
-        logger.warn({ headers: req.headers, body: req.body }, 'Login: body is null/undefined');
         return reply.status(400).send({ error: 'Request body is missing. Send Content-Type: application/json.' });
       }
-
-      logger.info({ contentType: req.headers['content-type'], bodyType: typeof rawBody }, 'Login attempt');
 
       const body = LoginSchema.parse(rawBody);
 
@@ -61,7 +59,6 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       });
     } catch (err: any) {
       if (err instanceof ZodError) {
-        logger.warn({ zodErrors: err.errors, body: req.body }, 'Login ZodError');
         return reply.status(400).send({ error: 'Invalid request: ' + err.errors.map(e => e.message).join(', ') });
       }
       logger.error({ err }, 'Unexpected login error');
