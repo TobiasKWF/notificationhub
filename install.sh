@@ -181,22 +181,21 @@ fi
 # Load .env into current shell so all subsequent commands (prisma, node) have DATABASE_URL etc.
 load_env "$ENV_FILE"
 
-# ──── 8. npm install
+# ──── 8. npm install (root workspace)
 step "Installing npm dependencies"
 cd "$INSTALL_DIR"
 npm install --legacy-peer-deps --quiet
-ok "Dependencies installed."
+ok "Root dependencies installed."
 
-# Resolve local prisma binary – in a workspace setup prisma lives in the backend package.
-# Using the local binary avoids npx pulling an incompatible global version (e.g. prisma v7).
-if [[ -x "${INSTALL_DIR}/packages/backend/node_modules/.bin/prisma" ]]; then
-  PRISMA_BIN="${INSTALL_DIR}/packages/backend/node_modules/.bin/prisma"
-elif [[ -x "${INSTALL_DIR}/node_modules/.bin/prisma" ]]; then
-  PRISMA_BIN="${INSTALL_DIR}/node_modules/.bin/prisma"
-else
-  die "Could not find local prisma binary after npm install. Check node_modules."
-fi
-info "Using prisma: ${PRISMA_BIN}"
+# ──── 8b. npm install in backend package to ensure prisma v5 is local
+cd "${INSTALL_DIR}/packages/backend"
+npm install --legacy-peer-deps --quiet
+ok "Backend dependencies installed."
+
+# Local prisma binary – guaranteed to be v5 from the backend package.json
+PRISMA_BIN="${INSTALL_DIR}/packages/backend/node_modules/.bin/prisma"
+[[ -x "$PRISMA_BIN" ]] || die "prisma binary not found at ${PRISMA_BIN} – npm install may have failed."
+info "Using prisma: $("${PRISMA_BIN}" --version | head -1)"
 
 # ──── 9. Select correct Prisma schema for the chosen DB
 step "Selecting Prisma schema for ${DB_TYPE}"
