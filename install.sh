@@ -179,67 +179,56 @@ fi
 
 load_env "$ENV_FILE"
 
-# ──── 8. typescript + tsx in /root/node_modules vorinstallieren
-# npm installiert auf diesem System immer nach /root/node_modules (kein globaler Prefix).
-# Das passiert BEVOR der Workspace-Install, damit Hoisting keinen Peer-Konflikt abwirft.
-step "Pre-installing typescript and tsx into root node_modules"
+# ──── 8. Alle Build-Tools in /root vorinstallieren
+# npm installiert auf diesem System nach /root/node_modules (kein globaler Prefix).
+# Hier werden ALLE Tools die im Workspace fehlen könnten vorab gesichert.
+step "Pre-installing all build tools into /root/node_modules"
 cd /root
-npm install typescript tsx 2>&1 | grep -v '^npm warn' || true
+npm install typescript tsx "vite" "@vitejs/plugin-react" \
+  "prisma@${PRISMA_VERSION}" "@prisma/client@${PRISMA_VERSION}" \
+  2>&1 | grep -v '^npm warn' || true
 
-# Pfade nach /root/node_modules sind jetzt garantiert vorhanden
-ROOT_TSC="/root/node_modules/.bin/tsc"
-ROOT_TSX="/root/node_modules/.bin/tsx"
-[[ -x "$ROOT_TSC" ]] || die "typescript konnte nicht in /root/node_modules installiert werden"
-[[ -x "$ROOT_TSX" ]] || die "tsx konnte nicht in /root/node_modules installiert werden"
-ok "typescript $($ROOT_TSC --version) und tsx in /root/node_modules verfügbar."
+ROOT_BIN="/root/node_modules/.bin"
+[[ -x "${ROOT_BIN}/tsc"    ]] || die "typescript konnte nicht in /root installiert werden"
+[[ -x "${ROOT_BIN}/tsx"    ]] || die "tsx konnte nicht in /root installiert werden"
+[[ -x "${ROOT_BIN}/vite"   ]] || die "vite konnte nicht in /root installiert werden"
+[[ -x "${ROOT_BIN}/prisma" ]] || die "prisma konnte nicht in /root installiert werden"
+ok "Build tools in /root/node_modules verfügbar: tsc $(${ROOT_BIN}/tsc --version)."
 
-# ──── 9. Projekt-Dependencies installieren
+# ──── 9. Projekt-Dependencies (sauber)
 step "Installing project dependencies (clean)"
 cd "$INSTALL_DIR"
 rm -rf node_modules packages/backend/node_modules packages/frontend/node_modules
 npm install --legacy-peer-deps
 ok "Project dependencies installed."
 
-# ──── 9b. Prisma lokal erzwingen
-step "Enforcing Prisma ${PRISMA_VERSION}"
-cd "$INSTALL_DIR"
-npm install --legacy-peer-deps "prisma@${PRISMA_VERSION}" "@prisma/client@${PRISMA_VERSION}"
-ok "Prisma ${PRISMA_VERSION} installed."
-
-# ──── Symlinks: /opt/notificationhub/node_modules/.bin/ → /root/node_modules
-# Pakete möglicherweise durch Workspace-Hoisting vorhanden, sonst Fallback auf /root
-step "Ensuring tsc and tsx symlinks in workspace .bin/"
+# ──── 9b. Symlinks für alle fehlenden Binaries setzen
+# Jedes Binary: wenn nicht im Workspace vorhanden → Symlink auf /root/node_modules
+step "Symlinking missing binaries into workspace .bin/"
 BIN_DIR="${INSTALL_DIR}/node_modules/.bin"
 mkdir -p "${BIN_DIR}"
 
-# tsc
-if [[ ! -x "${BIN_DIR}/tsc" ]]; then
-  ln -sf "$ROOT_TSC" "${BIN_DIR}/tsc"
-  info "tsc: Symlink auf ${ROOT_TSC} gesetzt."
-else
-  info "tsc: bereits in ${BIN_DIR} vorhanden."
-fi
+for binary in tsc tsx vite prisma; do
+  if [[ ! -x "${BIN_DIR}/${binary}" ]]; then
+    ln -sf "${ROOT_BIN}/${binary}" "${BIN_DIR}/${binary}"
+    info "${binary}: Symlink → ${ROOT_BIN}/${binary}"
+  else
+    info "${binary}: bereits im Workspace vorhanden."
+  fi
+done
 
-# tsx
-if [[ ! -x "${BIN_DIR}/tsx" ]]; then
-  ln -sf "$ROOT_TSX" "${BIN_DIR}/tsx"
-  info "tsx: Symlink auf ${ROOT_TSX} gesetzt."
-else
-  info "tsx: bereits in ${BIN_DIR} vorhanden."
-fi
-
-# ──── Alle Build-Binaries final verifizieren
+# ──── Finale Verifikation aller Build-Binaries
 TSC_BIN="${BIN_DIR}/tsc"
 TSX_BIN="${BIN_DIR}/tsx"
-PRISMA_BIN="${INSTALL_DIR}/node_modules/.bin/prisma"
-VITE_BIN="${INSTALL_DIR}/node_modules/.bin/vite"
+PRISMA_BIN="${BIN_DIR}/prisma"
+VITE_BIN="${BIN_DIR}/vite"
 
 [[ -x "$TSC_BIN"    ]] || die "tsc nicht gefunden unter ${TSC_BIN}"
 [[ -x "$TSX_BIN"    ]] || die "tsx nicht gefunden unter ${TSX_BIN}"
 [[ -x "$PRISMA_BIN" ]] || die "prisma nicht gefunden unter ${PRISMA_BIN}"
 [[ -x "$VITE_BIN"   ]] || die "vite nicht gefunden unter ${VITE_BIN}"
 
-ok "Alle Build-Tools verifiziert:"
+ok "Alle Build-Tools OK:"
 info "  tsc    → $("${TSC_BIN}" --version)"
 info "  prisma → $("${PRISMA_BIN}" --version 2>/dev/null | head -1)"
 info "  vite   → $("${VITE_BIN}" --version)"
