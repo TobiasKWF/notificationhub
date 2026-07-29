@@ -50,6 +50,7 @@ DB_NAME="${DB_NAME:-notificationhub}"
 DB_USER="${DB_USER:-notificationhub}"
 DB_PASS="${DB_PASS:-}"
 INSTALL_MARIADB="${INSTALL_MARIADB:-1}"
+PRISMA_VERSION="5.22.0"
 
 if [[ -t 0 && -z "${DB_TYPE_SET:-}" ]]; then
   echo; echo -e "${BOLD}Database Backend${NC}"
@@ -178,27 +179,39 @@ fi
 
 load_env "$ENV_FILE"
 
-# ──── 8. Clean install – wipe node_modules first to prevent any audit-fix pollution
+# ──── 8. npm install (clean slate)
 step "Installing npm dependencies (clean)"
 cd "$INSTALL_DIR"
-# Remove all node_modules to guarantee a pristine install from package.json only
+# Wipe all node_modules to prevent poisoning from previous npm audit fix --force runs
 rm -rf node_modules packages/backend/node_modules packages/frontend/node_modules
-npm install --legacy-peer-deps --quiet
-ok "Dependencies installed."
+npm install --legacy-peer-deps
+ok "Base dependencies installed."
 
-# ──── Verify critical binaries exist in root node_modules/.bin (workspace hoisting)
+# ──── 8b. Explicitly re-install build-critical tools into workspace root
+# npm workspaces can fail to hoist devDependencies when peer conflicts exist.
+# Force-installing directly into the root node_modules guarantees .bin/ symlinks exist.
+step "Ensuring build tools in workspace root"
+cd "$INSTALL_DIR"
+npm install --legacy-peer-deps \
+  "prisma@${PRISMA_VERSION}" \
+  "@prisma/client@${PRISMA_VERSION}" \
+  typescript \
+  tsx
+ok "Build tools installed."
+
+# ──── Verify all critical binaries
 PRISMA_BIN="${INSTALL_DIR}/node_modules/.bin/prisma"
 TSC_BIN="${INSTALL_DIR}/node_modules/.bin/tsc"
 TSX_BIN="${INSTALL_DIR}/node_modules/.bin/tsx"
 VITE_BIN="${INSTALL_DIR}/node_modules/.bin/vite"
 
-[[ -x "$PRISMA_BIN" ]] || die "prisma not found at ${PRISMA_BIN} – check packages/backend/package.json"
-[[ -x "$TSC_BIN"    ]] || die "tsc not found at ${TSC_BIN} – check root package.json devDependencies"
-[[ -x "$TSX_BIN"    ]] || die "tsx not found at ${TSX_BIN} – check root package.json devDependencies"
-[[ -x "$VITE_BIN"   ]] || die "vite not found at ${VITE_BIN} – check packages/frontend/package.json"
-ok "All build tools verified: tsc $("${TSC_BIN}" --version), Prisma $("${PRISMA_BIN}" --version 2>/dev/null | head -1)."
+[[ -x "$PRISMA_BIN" ]] || die "prisma fehlt in ${PRISMA_BIN}"
+[[ -x "$TSC_BIN"    ]] || die "tsc fehlt in ${TSC_BIN} – typescript nicht installiert"
+[[ -x "$TSX_BIN"    ]] || die "tsx fehlt in ${TSX_BIN}"
+[[ -x "$VITE_BIN"   ]] || die "vite fehlt in ${VITE_BIN}"
+ok "Build tools OK: tsc $("${TSC_BIN}" --version), Prisma $("${PRISMA_BIN}" --version 2>/dev/null | head -1)"
 
-# ──── 9. Select correct Prisma schema
+# ──── 9. Prisma schema
 step "Selecting Prisma schema for ${DB_TYPE}"
 PRISMA_DIR="${INSTALL_DIR}/packages/backend/prisma"
 if [[ "$DB_TYPE" == "mariadb" ]]; then
@@ -216,11 +229,11 @@ cd "${INSTALL_DIR}/packages/backend"
 "${PRISMA_BIN}" generate
 ok "Prisma client generated."
 
-# ──── 11. Build with absolute binary paths
+# ──── 11. Build mit absoluten Pfaden (kein npm run, kein PATH)
 step "Building backend"
 cd "${INSTALL_DIR}/packages/backend"
 "${TSC_BIN}" -p tsconfig.json
-ok "Backend built."
+ok "Backend compiled."
 
 step "Building frontend"
 cd "${INSTALL_DIR}/packages/frontend"
@@ -228,11 +241,11 @@ cd "${INSTALL_DIR}/packages/frontend"
 "${VITE_BIN}" build
 ok "Frontend built."
 
-# ──── 12. Prisma migrate + seed
+# ──── 12. DB migrate + seed
 step "Running database migrations"
 cd "${INSTALL_DIR}/packages/backend"
 "${PRISMA_BIN}" migrate deploy
-ok "Migrations applied (${DB_TYPE})."
+ok "Migrations applied."
 if "${PRISMA_BIN}" db seed 2>&1 | grep -q 'Admin already exists'; then
   info "Admin user already exists – skipping seed."
 else
@@ -240,7 +253,7 @@ else
 fi
 cd "$INSTALL_DIR"
 
-# ──── 13. systemd service
+# ──── 13. systemd
 step "Installing systemd service"
 _db_after="network.target"
 [[ "$DB_TYPE" == "mariadb" && "$INSTALL_MARIADB" == "1" ]] && _db_after="network.target mariadb.service"
@@ -277,7 +290,7 @@ EOF
 systemctl daemon-reload
 systemctl enable --quiet notificationhub
 systemctl restart notificationhub
-ok "notificationhub.service enabled and started."
+ok "notificationhub.service gestartet."
 
 # ──── 14. nginx
 step "Configuring nginx"
@@ -319,13 +332,13 @@ EOF
 ln -sf /etc/nginx/sites-available/notificationhub /etc/nginx/sites-enabled/notificationhub
 rm -f /etc/nginx/sites-enabled/default
 nginx -t -q && systemctl reload nginx
-ok "nginx configured."
+ok "nginx konfiguriert."
 
 # ──── 15. Firewall
 if command -v ufw &>/dev/null; then
   ufw allow 80/tcp &>/dev/null || true
   ufw allow 443/tcp &>/dev/null || true
-  ok "ufw rules for port 80/443 added."
+  ok "UFW-Regeln gesetzt."
 fi
 
 # ──── Done
@@ -343,6 +356,6 @@ echo -e "  ${BOLD}Database${NC}   ${DB_TYPE^^}$([ "$DB_TYPE" = 'mariadb' ] && ec
 echo
 echo -e "  ${BOLD}Logs${NC}       journalctl -u notificationhub -f"
 echo -e "  ${BOLD}Config${NC}     ${ENV_FILE}"
-echo -e "  ${BOLD}Update${NC}     git -C ${INSTALL_DIR} pull && npm install --legacy-peer-deps && systemctl restart notificationhub"
+echo -e "  ${BOLD}Update${NC}     git -C ${INSTALL_DIR} pull && bash ${INSTALL_DIR}/install.sh"
 echo
-warn "Change the admin password immediately after first login!"
+warn "Admin-Passwort nach dem ersten Login sofort ändern!"
