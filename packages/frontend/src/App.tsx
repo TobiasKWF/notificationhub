@@ -9,6 +9,7 @@ import { RulesPage } from '@/pages/RulesPage';
 import { ProvidersPage } from '@/pages/ProvidersPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { UsersPage } from '@/pages/UsersPage';
+import { TestNotificationPage } from '@/pages/TestNotificationPage';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token);
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="providers" element={<ProvidersPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="users" element={<UsersPage />} />
+          <Route path="test" element={<TestNotificationPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

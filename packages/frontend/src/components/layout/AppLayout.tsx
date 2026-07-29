@@ -2,7 +2,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/auth';
 import { connectWebSocket, disconnectWebSocket } from '@/lib/websocket';
 import { useEffect } from 'react';
-import { Bell, LayoutDashboard, Settings, Shield, Plug, Users, LogOut } from 'lucide-react';
+import { Bell, LayoutDashboard, Settings, Shield, Plug, Users, LogOut, FlaskConical } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const nav = [
@@ -12,6 +12,7 @@ const nav = [
   { to: '/providers',    label: 'Providers',       icon: Plug },
   { to: '/settings',     label: 'Settings',        icon: Settings },
   { to: '/users',        label: 'Users',           icon: Users },
+  { to: '/test',         label: 'Test',            icon: FlaskConical },
 ];
 
 export function AppLayout() {
