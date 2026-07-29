@@ -1,0 +1,29 @@
+{
+  "name": "notificationhub",
+  "version": "0.1.0",
+  "description": "Self-hosted notification routing engine",
+  "private": true,
+  "workspaces": [
+    "packages/backend",
+    "packages/frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "npm run dev --workspace=packages/backend",
+    "dev:frontend": "npm run dev --workspace=packages/frontend",
+    "build": "npm run build --workspace=packages/backend && npm run build --workspace=packages/frontend",
+    "db:migrate": "npm run db:migrate --workspace=packages/backend",
+    "db:studio": "npm run db:studio --workspace=packages/backend",
+    "lint": "npm run lint --workspaces",
+    "test": "npm run test --workspaces",
+    "typecheck": "npm run typecheck --workspaces"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  }
+}

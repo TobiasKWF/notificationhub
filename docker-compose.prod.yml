@@ -1,0 +1,49 @@
+# NotificationHub – Production Docker Compose with PostgreSQL
+# Usage: docker compose -f docker-compose.prod.yml up -d
+
+name: notificationhub-prod
+
+services:
+  app:
+    image: ghcr.io/tobiaskwf/notificationhub:latest
+    container_name: notificationhub
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-notificationhub}:${POSTGRES_PASSWORD:-secret}@postgres:5432/${POSTGRES_DB:-notificationhub}
+      - JWT_SECRET=${JWT_SECRET}
+      - APP_SECRET=${APP_SECRET}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - notificationhub_data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: notificationhub-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-notificationhub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+      POSTGRES_DB: ${POSTGRES_DB:-notificationhub}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-notificationhub}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  notificationhub_data:
+  postgres_data:
