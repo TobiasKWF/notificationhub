@@ -190,7 +190,6 @@ fi
 load_env "$ENV_FILE"
 
 # ──── 8. Alle Build-Tools in /root vorinstallieren
-# npm installiert auf diesem System nach /root/node_modules (kein globaler Prefix).
 step "Pre-installing all build tools into /root/node_modules"
 cd /root
 npm install \
@@ -204,7 +203,7 @@ ROOT_BIN="/root/node_modules/.bin"
 [[ -x "${ROOT_BIN}/tsx"    ]] || die "tsx konnte nicht in /root installiert werden"
 [[ -x "${ROOT_BIN}/vite"   ]] || die "vite konnte nicht in /root installiert werden"
 [[ -x "${ROOT_BIN}/prisma" ]] || die "prisma konnte nicht in /root installiert werden"
-ok "Build tools in /root/node_modules verfuegbar: tsc $(${ROOT_BIN}/tsc --version)."
+ok "Build tools verfuegbar: tsc $(${ROOT_BIN}/tsc --version)."
 
 # ──── 9. Projekt-Dependencies (sauber)
 step "Installing project dependencies (clean)"
@@ -213,38 +212,38 @@ rm -rf node_modules packages/backend/node_modules packages/frontend/node_modules
 npm install --legacy-peer-deps
 ok "Project dependencies installed."
 
-# ──── 9b. Fehlende Binaries in workspace .bin/ aufloesen
-# Suchpfade (in Reihenfolge): Root-Workspace, Frontend-Package, Backend-Package, /root/node_modules
+# ──── 9b. devDependencies explizit im Backend installieren
+# npm-Workspaces hoisten devDeps von Sub-Packages nicht immer zuverlaessig.
+# Das stellt sicher dass @types/bcryptjs, @types/nodemailer, etc. vorhanden sind.
+step "Installing backend devDependencies explicitly"
+cd "${INSTALL_DIR}/packages/backend"
+npm install --legacy-peer-deps --include=dev 2>&1 | grep -v '^npm warn' || true
+ok "Backend devDependencies installed."
+
+# ──── 9c. Fehlende Binaries in workspace .bin/ aufloesen
 step "Resolving missing build binaries"
 WS_BIN="${INSTALL_DIR}/node_modules/.bin"
 FE_BIN="${INSTALL_DIR}/packages/frontend/node_modules/.bin"
 BE_BIN="${INSTALL_DIR}/packages/backend/node_modules/.bin"
 mkdir -p "${WS_BIN}"
 
-# tsc + tsx: kommen aus typescript/tsx-Packages (meist im Root-Workspace)
 for binary in tsc tsx; do
   if [[ ! -x "${WS_BIN}/${binary}" ]]; then
     ln -sf "${ROOT_BIN}/${binary}" "${WS_BIN}/${binary}"
     info "${binary}: Symlink gesetzt (${ROOT_BIN}/${binary})"
   else
-    info "${binary}: bereits im Workspace vorhanden."
+    info "${binary}: bereits vorhanden."
   fi
 done
 
-# vite: liegt bei npm-Workspaces oft im Frontend-Package, nicht im Root
+# vite: Frontend-Package zuerst
 if [[ ! -x "${WS_BIN}/vite" ]]; then
-  # Suche in: frontend .bin, backend .bin, root .bin
-  VITE_SRC=$(find_binary "vite" \
-    "${FE_BIN}/vite" \
-    "${BE_BIN}/vite" \
-    "${ROOT_BIN}/vite" \
-  ) || true
+  VITE_SRC=$(find_binary "vite" "${FE_BIN}/vite" "${BE_BIN}/vite" "${ROOT_BIN}/vite") || true
   if [[ -n "${VITE_SRC:-}" ]]; then
     ln -sf "$VITE_SRC" "${WS_BIN}/vite"
     info "vite: Symlink gesetzt (${VITE_SRC})"
   else
-    # Letzter Ausweg: direkt nochmal installieren
-    info "vite: nicht gefunden, installiere direkt in Frontend-Package..."
+    info "vite nicht gefunden, installiere im Frontend-Package..."
     cd "${INSTALL_DIR}/packages/frontend"
     npm install --legacy-peer-deps vite @vitejs/plugin-react
     cd "$INSTALL_DIR"
@@ -252,26 +251,22 @@ if [[ ! -x "${WS_BIN}/vite" ]]; then
     info "vite: Symlink gesetzt (${FE_BIN}/vite)"
   fi
 else
-  info "vite: bereits im Workspace vorhanden."
+  info "vite: bereits vorhanden."
 fi
 
-# prisma: normalerweise im Root-Workspace nach prisma-enforce-Schritt
+# prisma
 if [[ ! -x "${WS_BIN}/prisma" ]]; then
-  PRISMA_SRC=$(find_binary "prisma" \
-    "${BE_BIN}/prisma" \
-    "${ROOT_BIN}/prisma" \
-  ) || true
+  PRISMA_SRC=$(find_binary "prisma" "${BE_BIN}/prisma" "${ROOT_BIN}/prisma") || true
   if [[ -n "${PRISMA_SRC:-}" ]]; then
     ln -sf "$PRISMA_SRC" "${WS_BIN}/prisma"
     info "prisma: Symlink gesetzt (${PRISMA_SRC})"
   else
-    info "prisma: nicht gefunden, installiere direkt..."
     cd "$INSTALL_DIR"
     npm install --legacy-peer-deps "prisma@${PRISMA_VERSION}"
     ln -sf "${ROOT_BIN}/prisma" "${WS_BIN}/prisma"
   fi
 else
-  info "prisma: bereits im Workspace vorhanden."
+  info "prisma: bereits vorhanden."
 fi
 
 # ──── Finale Verifikation
@@ -279,7 +274,6 @@ TSC_BIN="${WS_BIN}/tsc"
 TSX_BIN="${WS_BIN}/tsx"
 VITE_BIN="${WS_BIN}/vite"
 PRISMA_BIN="${WS_BIN}/prisma"
-# Prisma kann auch direkt im Backend liegen
 [[ -x "$PRISMA_BIN" ]] || PRISMA_BIN="${BE_BIN}/prisma"
 [[ -x "$VITE_BIN"   ]] || VITE_BIN="${FE_BIN}/vite"
 
