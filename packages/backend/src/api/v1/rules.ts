@@ -1,23 +1,40 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { prisma } from '../../lib/prisma.js';
+import { auditLog } from '../../lib/audit.js';
 
 export const rulesRoutes: FastifyPluginAsync = async (app) => {
-  app.get('/', async (_req, reply) => {
+  const auth = [(app as any).authenticate];
+
+  /** GET /api/v1/rules */
+  app.get('/', { onRequest: auth }, async (_req, reply) => {
     const rules = await prisma.rule.findMany({
-      include: { actions: { include: { provider: true } } },
+      include: { actions: { include: { provider: true }, orderBy: { sortOrder: 'asc' } } },
       orderBy: { priority: 'asc' },
     });
     return reply.send(rules);
   });
 
-  app.post('/', async (req, reply) => {
+  /** GET /api/v1/rules/:id */
+  app.get('/:id', { onRequest: auth }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const rule = await prisma.rule.findUnique({
+      where: { id },
+      include: { actions: { include: { provider: true }, orderBy: { sortOrder: 'asc' } } },
+    });
+    if (!rule) return reply.status(404).send({ error: 'Not found' });
+    return reply.send(rule);
+  });
+
+  /** POST /api/v1/rules */
+  app.post('/', { onRequest: auth }, async (req, reply) => {
     const body = req.body as any;
+    const { sub } = req.user as { sub: string };
     const rule = await prisma.rule.create({
       data: {
         name:           body.name,
         description:    body.description,
-        isEnabled:      body.isEnabled ?? true,
-        priority:       body.priority ?? 100,
+        isEnabled:      body.isEnabled      ?? true,
+        priority:       body.priority       ?? 100,
         stopProcessing: body.stopProcessing ?? false,
         conditions:     JSON.stringify(body.conditions ?? []),
         conditionLogic: body.conditionLogic ?? 'AND',
@@ -32,32 +49,74 @@ export const rulesRoutes: FastifyPluginAsync = async (app) => {
       },
       include: { actions: { include: { provider: true } } },
     });
+    auditLog({ userId: sub, action: 'create', resource: 'rule', resourceId: rule.id });
     return reply.status(201).send(rule);
   });
 
-  app.put('/:id', async (req, reply) => {
+  /** PUT /api/v1/rules/:id */
+  app.put('/:id', { onRequest: auth }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const { sub } = req.user as { sub: string };
     const body = req.body as any;
+
     const rule = await prisma.rule.update({
       where: { id },
       data: {
-        ...body,
-        conditions: body.conditions ? JSON.stringify(body.conditions) : undefined,
+        name:           body.name,
+        description:    body.description,
+        isEnabled:      body.isEnabled,
+        priority:       body.priority,
+        stopProcessing: body.stopProcessing,
+        conditions:     body.conditions ? JSON.stringify(body.conditions) : undefined,
+        conditionLogic: body.conditionLogic,
       },
       include: { actions: { include: { provider: true } } },
     });
+    auditLog({ userId: sub, action: 'update', resource: 'rule', resourceId: id });
     return reply.send(rule);
   });
 
-  app.delete('/:id', async (req, reply) => {
+  /** PATCH /api/v1/rules/:id/toggle – quick enable/disable */
+  app.patch('/:id/toggle', { onRequest: auth }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const current = await prisma.rule.findUnique({ where: { id }, select: { isEnabled: true } });
+    if (!current) return reply.status(404).send({ error: 'Not found' });
+    const rule = await prisma.rule.update({
+      where: { id },
+      data: { isEnabled: !current.isEnabled },
+    });
+    return reply.send({ id: rule.id, isEnabled: rule.isEnabled });
+  });
+
+  /** DELETE /api/v1/rules/:id */
+  app.delete('/:id', { onRequest: auth }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { sub } = req.user as { sub: string };
     await prisma.rule.delete({ where: { id } });
+    auditLog({ userId: sub, action: 'delete', resource: 'rule', resourceId: id });
     return reply.status(204).send();
   });
 
-  // POST /api/v1/rules/:id/test  – simulate notification against one rule
-  app.post('/:id/test', async (req, reply) => {
-    // TODO: dry-run a test payload through the rule without persisting
-    return reply.send({ result: 'matched', actions: [] });
+  /** POST /api/v1/rules/:id/test – dry-run a payload through the rule */
+  app.post('/:id/test', { onRequest: auth }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const rule = await prisma.rule.findUnique({
+      where: { id },
+      include: { actions: { include: { provider: true } } },
+    });
+    if (!rule) return reply.status(404).send({ error: 'Not found' });
+
+    const payload = req.body as any;
+    let conditions: any[] = [];
+    try { conditions = JSON.parse(rule.conditions); } catch { /* ignore */ }
+
+    // Evaluate conditions against the test payload
+    const { evaluateConditions } = await import('../../core/rulesEngine.js');
+    const matched = evaluateConditions(conditions, rule.conditionLogic as any, payload);
+    return reply.send({
+      ruleId:  id,
+      matched,
+      actions: matched ? rule.actions.map((a) => ({ type: a.type, providerId: a.providerId })) : [],
+    });
   });
 };
