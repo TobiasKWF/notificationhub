@@ -1,11 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify';
+import type { SocketStream } from '@fastify/websocket';
 import { eventBus } from '../lib/eventBus.js';
 import { logger } from '../lib/logger.js';
 
-const clients = new Set<import('ws').WebSocket>();
+// Use SocketStream (the type @fastify/websocket actually provides)
+const clients = new Set<SocketStream>();
 
 export const wsRoute: FastifyPluginAsync = async (app) => {
-  app.get('/ws', { websocket: true }, (socket) => {
+  app.get('/ws', { websocket: true }, (socket: SocketStream) => {
     clients.add(socket);
     logger.debug({ total: clients.size }, 'WS client connected');
 
@@ -14,14 +16,16 @@ export const wsRoute: FastifyPluginAsync = async (app) => {
       logger.debug({ total: clients.size }, 'WS client disconnected');
     });
 
-    socket.send(JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() }));
+    socket.socket.send(JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() }));
   });
 };
 
 export function broadcastNotification(notification: object) {
   const payload = JSON.stringify({ type: 'notification', data: notification });
   for (const client of clients) {
-    if (client.readyState === 1) client.send(payload);
+    try {
+      if (client.socket.readyState === 1) client.socket.send(payload);
+    } catch { /* ignore closed sockets */ }
   }
 }
 

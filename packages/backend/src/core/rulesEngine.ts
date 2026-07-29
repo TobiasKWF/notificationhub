@@ -1,7 +1,5 @@
 /**
  * Core Rules Engine
- * Loads all active rules (ordered by priority), evaluates each rule's conditions
- * against an incoming notification, and executes the matching actions.
  */
 import type { Notification, Rule, RuleAction, Provider } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
@@ -10,25 +8,17 @@ import { dispatchToProvider } from '../providers/index.js';
 
 type RuleWithActions = Rule & { actions: (RuleAction & { provider: Provider | null })[] };
 
-// ---------------------------------------------------------------------------
-// Condition types (exported for use in /test route)
-// ---------------------------------------------------------------------------
-
 export type ConditionOperator =
   | 'eq' | 'neq' | 'contains' | 'not_contains'
   | 'regex' | 'in' | 'gt' | 'lt' | 'exists';
 
 export type Condition = {
-  field: string;       // source | service | priority | hostname | title | message | tags | extra.*
+  field: string;
   operator: ConditionOperator;
   value: string | string[];
 };
 
 export type ConditionLogic = 'AND' | 'OR';
-
-// ---------------------------------------------------------------------------
-// Condition evaluation (exported for dry-run / test route)
-// ---------------------------------------------------------------------------
 
 function evaluateCondition(n: Notification, cond: Condition): boolean {
   const tags: string[] = JSON.parse(n.tags);
@@ -48,7 +38,7 @@ function evaluateCondition(n: Notification, cond: Condition): boolean {
     }
   })();
 
-  if (fieldValue === undefined) return cond.operator === 'exists' ? false : false;
+  if (fieldValue === undefined) return false;
 
   const val = String(cond.value);
   const fv  = Array.isArray(fieldValue) ? fieldValue : [String(fieldValue)];
@@ -72,34 +62,21 @@ function evaluateCondition(n: Notification, cond: Condition): boolean {
   }
 }
 
-/**
- * Evaluate a list of conditions against a notification.
- * Exported so the /api/v1/rules/:id/test route can do a dry-run.
- *
- * @param conditions  Array of Condition objects
- * @param logic       'AND' | 'OR' (default: 'AND')
- * @param notification  Full Notification or partial test payload cast to Notification
- */
 export function evaluateConditions(
   conditions: Condition[],
   logic: ConditionLogic = 'AND',
   notification: Notification,
 ): boolean {
-  if (conditions.length === 0) return true; // no conditions = match all
+  if (conditions.length === 0) return true;
   return logic === 'AND'
     ? conditions.every(c => evaluateCondition(notification, c))
     : conditions.some(c  => evaluateCondition(notification, c));
 }
 
-/** @internal Used by processNotification — wraps evaluateConditions with parsed rule data */
 function evaluateRule(n: Notification, rule: Rule): boolean {
   const conditions: Condition[] = JSON.parse(rule.conditions);
   return evaluateConditions(conditions, rule.conditionLogic as ConditionLogic, n);
 }
-
-// ---------------------------------------------------------------------------
-// Action execution
-// ---------------------------------------------------------------------------
 
 async function executeAction(
   action: RuleAction & { provider: Provider | null },
@@ -112,16 +89,12 @@ async function executeAction(
     case 'DROP':
       logger.debug({ notificationId: notification.id }, 'Rule action: DROP');
       return;
-
     case 'STORE':
-      // Already stored on ingestion — no-op
       return;
-
     case 'FORWARD':
       if (!action.provider) { logger.warn({ actionId: action.id }, 'FORWARD has no provider'); return; }
       await dispatchToProvider(action.provider, notification, ruleId);
       return;
-
     case 'ADD_TAG': {
       const tags: string[] = JSON.parse(notification.tags);
       const tag = String(config.tag ?? '');
@@ -134,7 +107,6 @@ async function executeAction(
       }
       return;
     }
-
     case 'MODIFY': {
       const update: Record<string, unknown> = {};
       if (config.priority) update.priority = config.priority;
@@ -143,26 +115,20 @@ async function executeAction(
         await prisma.notification.update({ where: { id: notification.id }, data: update as any });
       return;
     }
-
     case 'ESCALATE':
       logger.info({ notificationId: notification.id, policy: config.policyId }, 'Escalation triggered');
       return;
-
     default:
       logger.warn({ type: action.type }, 'Unhandled action type');
   }
 }
 
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
-
-let cachedRules: RuleWithActions[] | null = null;
+let cachedRules: RuleWithActions[] = [];
 let cacheTs = 0;
 const CACHE_TTL_MS = 5_000;
 
 async function loadRules(): Promise<RuleWithActions[]> {
-  if (cachedRules && Date.now() - cacheTs < CACHE_TTL_MS) return cachedRules;
+  if (cachedRules.length > 0 && Date.now() - cacheTs < CACHE_TTL_MS) return cachedRules;
   cachedRules = await prisma.rule.findMany({
     where:   { isEnabled: true },
     orderBy: { priority: 'asc' },
@@ -173,20 +139,17 @@ async function loadRules(): Promise<RuleWithActions[]> {
 }
 
 export function invalidateRulesCache(): void {
-  cachedRules = null;
+  cachedRules = [];
 }
 
 export async function processNotification(notification: Notification): Promise<void> {
   const rules = await loadRules();
-
   for (const rule of rules) {
     if (!evaluateRule(notification, rule)) continue;
     logger.debug({ ruleId: rule.id, notificationId: notification.id }, 'Rule matched');
-
     for (const action of rule.actions) {
       await executeAction(action, notification, rule.id);
     }
-
     if (rule.stopProcessing) break;
   }
 }

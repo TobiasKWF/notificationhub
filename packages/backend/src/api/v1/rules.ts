@@ -1,11 +1,11 @@
 import type { FastifyPluginAsync } from 'fastify';
+import type { RuleAction } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { auditLog } from '../../lib/audit.js';
 
 export const rulesRoutes: FastifyPluginAsync = async (app) => {
   const auth = [(app as any).authenticate];
 
-  /** GET /api/v1/rules */
   app.get('/', { onRequest: auth }, async (_req, reply) => {
     const rules = await prisma.rule.findMany({
       include: { actions: { include: { provider: true }, orderBy: { sortOrder: 'asc' } } },
@@ -14,7 +14,6 @@ export const rulesRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(rules);
   });
 
-  /** GET /api/v1/rules/:id */
   app.get('/:id', { onRequest: auth }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const rule = await prisma.rule.findUnique({
@@ -25,7 +24,6 @@ export const rulesRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(rule);
   });
 
-  /** POST /api/v1/rules */
   app.post('/', { onRequest: auth }, async (req, reply) => {
     const body = req.body as any;
     const { sub } = req.user as { sub: string };
@@ -53,12 +51,10 @@ export const rulesRoutes: FastifyPluginAsync = async (app) => {
     return reply.status(201).send(rule);
   });
 
-  /** PUT /api/v1/rules/:id */
   app.put('/:id', { onRequest: auth }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const { sub } = req.user as { sub: string };
     const body = req.body as any;
-
     const rule = await prisma.rule.update({
       where: { id },
       data: {
@@ -76,7 +72,6 @@ export const rulesRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(rule);
   });
 
-  /** PATCH /api/v1/rules/:id/toggle – quick enable/disable */
   app.patch('/:id/toggle', { onRequest: auth }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const current = await prisma.rule.findUnique({ where: { id }, select: { isEnabled: true } });
@@ -88,7 +83,6 @@ export const rulesRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ id: rule.id, isEnabled: rule.isEnabled });
   });
 
-  /** DELETE /api/v1/rules/:id */
   app.delete('/:id', { onRequest: auth }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const { sub } = req.user as { sub: string };
@@ -97,7 +91,6 @@ export const rulesRoutes: FastifyPluginAsync = async (app) => {
     return reply.status(204).send();
   });
 
-  /** POST /api/v1/rules/:id/test – dry-run a payload through the rule */
   app.post('/:id/test', { onRequest: auth }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const rule = await prisma.rule.findUnique({
@@ -110,13 +103,12 @@ export const rulesRoutes: FastifyPluginAsync = async (app) => {
     let conditions: any[] = [];
     try { conditions = JSON.parse(rule.conditions); } catch { /* ignore */ }
 
-    // Evaluate conditions against the test payload
     const { evaluateConditions } = await import('../../core/rulesEngine.js');
     const matched = evaluateConditions(conditions, rule.conditionLogic as any, payload);
     return reply.send({
       ruleId:  id,
       matched,
-      actions: matched ? rule.actions.map((a) => ({ type: a.type, providerId: a.providerId })) : [],
+      actions: matched ? rule.actions.map((a: RuleAction) => ({ type: a.type, providerId: a.providerId })) : [],
     });
   });
 };
