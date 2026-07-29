@@ -1,30 +1,29 @@
-import * as Toast from '@radix-ui/react-toast';
 import { useToastStore } from '@/stores/toast';
+import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export function Toaster() {
   const { toasts, dismiss } = useToastStore();
+
   return (
-    <Toast.Provider swipeDirection="right">
+    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 w-80">
       {toasts.map((t) => (
-        <Toast.Root
+        <div
           key={t.id}
-          open
-          onOpenChange={(open) => !open && dismiss(t.id)}
           className={cn(
-            'group pointer-events-auto relative flex w-full items-center justify-between space-x-4 overflow-hidden rounded-md border p-4 shadow-lg transition-all',
-            'bg-background border-border',
-            t.variant === 'destructive' && 'border-destructive bg-destructive text-destructive-foreground',
+            'flex items-start gap-3 rounded-lg border p-4 shadow-lg bg-card text-card-foreground animate-in slide-in-from-bottom-2',
+            t.variant === 'destructive' && 'border-destructive text-destructive',
           )}
         >
-          <div className="grid gap-1">
-            {t.title && <Toast.Title className="text-sm font-semibold">{t.title}</Toast.Title>}
-            {t.description && <Toast.Description className="text-sm opacity-90">{t.description}</Toast.Description>}
+          <div className="flex-1">
+            <p className="text-sm font-medium">{t.title}</p>
+            {t.description && <p className="text-xs text-muted-foreground mt-0.5">{t.description}</p>}
           </div>
-          <Toast.Close className="opacity-60 hover:opacity-100 transition-opacity text-lg leading-none">×</Toast.Close>
-        </Toast.Root>
+          <button onClick={() => dismiss(t.id)} className="shrink-0 opacity-50 hover:opacity-100">
+            <X className="size-4" />
+          </button>
+        </div>
       ))}
-      <Toast.Viewport className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 w-96 max-w-[100vw]" />
-    </Toast.Provider>
+    </div>
   );
 }

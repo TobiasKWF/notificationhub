@@ -1,19 +1,19 @@
 import { create } from 'zustand';
 
-interface Toast {
+export interface Toast {
   id: string;
-  title?: string;
+  title: string;
   description?: string;
   variant?: 'default' | 'destructive';
 }
 
-interface ToastStore {
+interface ToastState {
   toasts: Toast[];
   toast: (t: Omit<Toast, 'id'>) => void;
   dismiss: (id: string) => void;
 }
 
-export const useToastStore = create<ToastStore>((set) => ({
+export const useToastStore = create<ToastState>((set) => ({
   toasts: [],
   toast: (t) => {
     const id = Math.random().toString(36).slice(2);
@@ -23,4 +23,7 @@ export const useToastStore = create<ToastStore>((set) => ({
   dismiss: (id) => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })),
 }));
 
-export const toast = (t: Omit<Toast, 'id'>) => useToastStore.getState().toast(t);
+export function useToast() {
+  const { toast } = useToastStore();
+  return { toast };
+}
