@@ -175,7 +175,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
   ADMIN_PASS_GENERATED="$ADMIN_PASS"
 else
   info ".env already exists – skipping."
-  ADMIN_PASS_GENERATED=$(grep '^ADMIN_PASSWORD' "${ENV_FILE}" | cut -d= -f2 | tr -d '"\'')
+  ADMIN_PASS_GENERATED=$(awk -F= '/^ADMIN_PASSWORD=/{sub(/^[^=]*=/,""); print; exit}' "${ENV_FILE}" | sed 's/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')
 fi
 
 # ──── 8. npm install
