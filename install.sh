@@ -51,8 +51,6 @@ DB_NAME="${DB_NAME:-notificationhub}"
 DB_USER="${DB_USER:-notificationhub}"
 DB_PASS="${DB_PASS:-}"
 INSTALL_MARIADB="${INSTALL_MARIADB:-1}"
-
-# Exact Prisma v5 version to use throughout the install
 PRISMA_VERSION="5.22.0"
 
 if [[ -t 0 && -z "${DB_TYPE_SET:-}" ]]; then
@@ -180,29 +178,37 @@ else
   ADMIN_PASS_GENERATED=$(awk -F= '/^ADMIN_PASSWORD=/{sub(/^[^=]*=/,""); print; exit}' "${ENV_FILE}" | sed 's/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')
 fi
 
-# Load .env into current shell
 load_env "$ENV_FILE"
 
-# ──── 8. npm install
+# ──── 8. npm install + enforce prisma v5 in root (workspace hoisting puts all binaries there)
 step "Installing npm dependencies"
 cd "$INSTALL_DIR"
+# Remove any wrong prisma version that may have been installed by npm audit fix --force
+if [[ -d node_modules/prisma ]]; then
+  _cur_prisma=$(node -e "try{process.stdout.write(require('./node_modules/prisma/package.json').version)}catch(e){}" 2>/dev/null || true)
+  if [[ "$_cur_prisma" != 5.* ]]; then
+    warn "Found incompatible prisma@${_cur_prisma} in root node_modules, removing..."
+    rm -rf node_modules/prisma node_modules/@prisma node_modules/.bin/prisma
+  fi
+fi
 npm install --legacy-peer-deps --quiet
 ok "Dependencies installed."
 
-# ──── 8b. Pin prisma@5 explicitly in backend to prevent hoisting of wrong version
-step "Pinning Prisma ${PRISMA_VERSION} in backend"
-cd "${INSTALL_DIR}/packages/backend"
-npm install --save-dev --legacy-peer-deps "prisma@${PRISMA_VERSION}" --quiet
-npm install --save --legacy-peer-deps "@prisma/client@${PRISMA_VERSION}" --quiet
-
-# Resolve the binary – must exist now
-PRISMA_BIN="${INSTALL_DIR}/packages/backend/node_modules/.bin/prisma"
-if [[ ! -x "$PRISMA_BIN" ]]; then
-  # Last resort: use node to run the prisma package directly
-  PRISMA_BIN="node ${INSTALL_DIR}/packages/backend/node_modules/prisma/build/index.js"
+# ──── 8b. Enforce prisma@5 in root node_modules (workspace binary is always hoisted here)
+step "Enforcing Prisma ${PRISMA_VERSION}"
+cd "$INSTALL_DIR"
+_installed_prisma=$(node -e "try{process.stdout.write(require('./node_modules/prisma/package.json').version)}catch(e){process.stdout.write('none')}" 2>/dev/null || echo "none")
+if [[ "$_installed_prisma" != 5.* ]]; then
+  info "Prisma version '${_installed_prisma}' detected, installing prisma@${PRISMA_VERSION}..."
+  npm install --no-save --legacy-peer-deps "prisma@${PRISMA_VERSION}" "@prisma/client@${PRISMA_VERSION}" --quiet
+else
+  info "Prisma ${_installed_prisma} already correct."
 fi
-ok "Prisma ${PRISMA_VERSION} pinned."
-info "Prisma binary: ${PRISMA_BIN}"
+
+# Workspace hoisting: binary is always in root node_modules/.bin/
+PRISMA_BIN="${INSTALL_DIR}/node_modules/.bin/prisma"
+[[ -x "$PRISMA_BIN" ]] || die "prisma binary not found at ${PRISMA_BIN} after npm install."
+ok "Using Prisma $("${PRISMA_BIN}" --version 2>/dev/null | head -1 || echo ${PRISMA_VERSION})."
 
 # ──── 9. Select correct Prisma schema
 step "Selecting Prisma schema for ${DB_TYPE}"
@@ -219,7 +225,7 @@ ok "Prisma schema selected."
 # ──── 10. Prisma generate
 step "Generating Prisma client"
 cd "${INSTALL_DIR}/packages/backend"
-${PRISMA_BIN} generate
+"${PRISMA_BIN}" generate
 ok "Prisma client generated."
 
 # ──── 11. Build
@@ -232,9 +238,9 @@ ok "Build complete."
 # ──── 12. Prisma migrate + seed
 step "Running database migrations"
 cd "${INSTALL_DIR}/packages/backend"
-${PRISMA_BIN} migrate deploy
+"${PRISMA_BIN}" migrate deploy
 ok "Migrations applied (${DB_TYPE})."
-if ${PRISMA_BIN} db seed 2>&1 | grep -q 'Admin already exists'; then
+if "${PRISMA_BIN}" db seed 2>&1 | grep -q 'Admin already exists'; then
   info "Admin user already exists – skipping seed."
 else
   ok "Database seeded."
