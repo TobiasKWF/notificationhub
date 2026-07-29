@@ -52,7 +52,6 @@ export async function buildApp() {
 
   // Decorate authenticate helper (JWT or API-Key)
   app.decorate('authenticate', async (req: any, reply: any) => {
-    // Try X-API-Key header first
     const apiKey = req.headers['x-api-key'] as string | undefined;
     if (apiKey) {
       const { validateApiToken } = await import('./lib/apiToken.js');
@@ -61,7 +60,6 @@ export async function buildApp() {
       req.user = { sub: user.userId, role: 'API_USER' };
       return;
     }
-    // Fall back to JWT
     try {
       await req.jwtVerify();
     } catch {
@@ -103,20 +101,13 @@ export async function buildApp() {
     uiConfig: { docExpansion: 'list' },
   });
 
-  // Serve built frontend
-  const frontendDist = join(__dirname, '..', '..', '..', 'frontend', 'dist');
-  await app.register(staticPlugin, { root: frontendDist, prefix: '/', wildcard: false });
-
+  // ── API routes first – must be registered BEFORE static plugin
+  // so Fastify matches /api/* routes before the catch-all static handler.
   await app.register(healthRoute);
   await app.register(wsRoute);
 
-  // Auth (public)
-  await app.register(authRoutes, { prefix: '/api/v1/auth' });
-
-  // Ingestion endpoint – needs auth (JWT or API-Key)
+  await app.register(authRoutes,          { prefix: '/api/v1/auth' });
   await app.register(notifyRoute,         { prefix: '/api/v1' });
-
-  // Protected routes
   await app.register(notificationsRoutes, { prefix: '/api/v1/notifications' });
   await app.register(rulesRoutes,         { prefix: '/api/v1/rules' });
   await app.register(providersRoutes,     { prefix: '/api/v1/providers' });
@@ -128,13 +119,20 @@ export async function buildApp() {
   await app.register(templatesRoutes,     { prefix: '/api/v1/templates' });
   await app.register(auditLogRoutes,      { prefix: '/api/v1/audit' });
 
-  app.setNotFoundHandler((_req, reply) => {
+  // ── Static plugin AFTER API routes
+  const frontendDist = join(__dirname, '..', '..', '..', 'frontend', 'dist');
+  await app.register(staticPlugin, { root: frontendDist, prefix: '/', wildcard: false });
+
+  // ── SPA fallback: only serve index.html for non-API paths
+  app.setNotFoundHandler((req, reply) => {
+    if (req.url.startsWith('/api/')) {
+      return reply.status(404).send({ error: 'Not Found' });
+    }
     reply.sendFile('index.html', frontendDist);
   });
 
   app.setErrorHandler((error, _req, reply) => {
     logger.error(error);
-    // Don't leak internals in production
     const statusCode = error.statusCode ?? 500;
     reply.status(statusCode).send({
       error: statusCode < 500 ? error.message : 'Internal Server Error',
