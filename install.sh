@@ -27,6 +27,16 @@ load_env() {
   done < "$file"
 }
 
+# Findet eine Binary in mehreren moeglichen Pfaden
+find_binary() {
+  local name="$1"
+  shift
+  for p in "$@"; do
+    [[ -x "$p" ]] && { echo "$p"; return 0; }
+  done
+  return 1
+}
+
 [[ $EUID -eq 0 ]] || die "Run as root (sudo bash install.sh)"
 
 if [[ -f /etc/os-release ]]; then
@@ -181,10 +191,11 @@ load_env "$ENV_FILE"
 
 # ──── 8. Alle Build-Tools in /root vorinstallieren
 # npm installiert auf diesem System nach /root/node_modules (kein globaler Prefix).
-# Hier werden ALLE Tools die im Workspace fehlen könnten vorab gesichert.
 step "Pre-installing all build tools into /root/node_modules"
 cd /root
-npm install typescript tsx "vite" "@vitejs/plugin-react" \
+npm install \
+  typescript tsx \
+  vite @vitejs/plugin-react \
   "prisma@${PRISMA_VERSION}" "@prisma/client@${PRISMA_VERSION}" \
   2>&1 | grep -v '^npm warn' || true
 
@@ -193,7 +204,7 @@ ROOT_BIN="/root/node_modules/.bin"
 [[ -x "${ROOT_BIN}/tsx"    ]] || die "tsx konnte nicht in /root installiert werden"
 [[ -x "${ROOT_BIN}/vite"   ]] || die "vite konnte nicht in /root installiert werden"
 [[ -x "${ROOT_BIN}/prisma" ]] || die "prisma konnte nicht in /root installiert werden"
-ok "Build tools in /root/node_modules verfügbar: tsc $(${ROOT_BIN}/tsc --version)."
+ok "Build tools in /root/node_modules verfuegbar: tsc $(${ROOT_BIN}/tsc --version)."
 
 # ──── 9. Projekt-Dependencies (sauber)
 step "Installing project dependencies (clean)"
@@ -202,36 +213,85 @@ rm -rf node_modules packages/backend/node_modules packages/frontend/node_modules
 npm install --legacy-peer-deps
 ok "Project dependencies installed."
 
-# ──── 9b. Symlinks für alle fehlenden Binaries setzen
-# Jedes Binary: wenn nicht im Workspace vorhanden → Symlink auf /root/node_modules
-step "Symlinking missing binaries into workspace .bin/"
-BIN_DIR="${INSTALL_DIR}/node_modules/.bin"
-mkdir -p "${BIN_DIR}"
+# ──── 9b. Fehlende Binaries in workspace .bin/ aufloesen
+# Suchpfade (in Reihenfolge): Root-Workspace, Frontend-Package, Backend-Package, /root/node_modules
+step "Resolving missing build binaries"
+WS_BIN="${INSTALL_DIR}/node_modules/.bin"
+FE_BIN="${INSTALL_DIR}/packages/frontend/node_modules/.bin"
+BE_BIN="${INSTALL_DIR}/packages/backend/node_modules/.bin"
+mkdir -p "${WS_BIN}"
 
-for binary in tsc tsx vite prisma; do
-  if [[ ! -x "${BIN_DIR}/${binary}" ]]; then
-    ln -sf "${ROOT_BIN}/${binary}" "${BIN_DIR}/${binary}"
-    info "${binary}: Symlink → ${ROOT_BIN}/${binary}"
+# tsc + tsx: kommen aus typescript/tsx-Packages (meist im Root-Workspace)
+for binary in tsc tsx; do
+  if [[ ! -x "${WS_BIN}/${binary}" ]]; then
+    ln -sf "${ROOT_BIN}/${binary}" "${WS_BIN}/${binary}"
+    info "${binary}: Symlink gesetzt (${ROOT_BIN}/${binary})"
   else
     info "${binary}: bereits im Workspace vorhanden."
   fi
 done
 
-# ──── Finale Verifikation aller Build-Binaries
-TSC_BIN="${BIN_DIR}/tsc"
-TSX_BIN="${BIN_DIR}/tsx"
-PRISMA_BIN="${BIN_DIR}/prisma"
-VITE_BIN="${BIN_DIR}/vite"
+# vite: liegt bei npm-Workspaces oft im Frontend-Package, nicht im Root
+if [[ ! -x "${WS_BIN}/vite" ]]; then
+  # Suche in: frontend .bin, backend .bin, root .bin
+  VITE_SRC=$(find_binary "vite" \
+    "${FE_BIN}/vite" \
+    "${BE_BIN}/vite" \
+    "${ROOT_BIN}/vite" \
+  ) || true
+  if [[ -n "${VITE_SRC:-}" ]]; then
+    ln -sf "$VITE_SRC" "${WS_BIN}/vite"
+    info "vite: Symlink gesetzt (${VITE_SRC})"
+  else
+    # Letzter Ausweg: direkt nochmal installieren
+    info "vite: nicht gefunden, installiere direkt in Frontend-Package..."
+    cd "${INSTALL_DIR}/packages/frontend"
+    npm install --legacy-peer-deps vite @vitejs/plugin-react
+    cd "$INSTALL_DIR"
+    ln -sf "${FE_BIN}/vite" "${WS_BIN}/vite"
+    info "vite: Symlink gesetzt (${FE_BIN}/vite)"
+  fi
+else
+  info "vite: bereits im Workspace vorhanden."
+fi
 
-[[ -x "$TSC_BIN"    ]] || die "tsc nicht gefunden unter ${TSC_BIN}"
-[[ -x "$TSX_BIN"    ]] || die "tsx nicht gefunden unter ${TSX_BIN}"
-[[ -x "$PRISMA_BIN" ]] || die "prisma nicht gefunden unter ${PRISMA_BIN}"
-[[ -x "$VITE_BIN"   ]] || die "vite nicht gefunden unter ${VITE_BIN}"
+# prisma: normalerweise im Root-Workspace nach prisma-enforce-Schritt
+if [[ ! -x "${WS_BIN}/prisma" ]]; then
+  PRISMA_SRC=$(find_binary "prisma" \
+    "${BE_BIN}/prisma" \
+    "${ROOT_BIN}/prisma" \
+  ) || true
+  if [[ -n "${PRISMA_SRC:-}" ]]; then
+    ln -sf "$PRISMA_SRC" "${WS_BIN}/prisma"
+    info "prisma: Symlink gesetzt (${PRISMA_SRC})"
+  else
+    info "prisma: nicht gefunden, installiere direkt..."
+    cd "$INSTALL_DIR"
+    npm install --legacy-peer-deps "prisma@${PRISMA_VERSION}"
+    ln -sf "${ROOT_BIN}/prisma" "${WS_BIN}/prisma"
+  fi
+else
+  info "prisma: bereits im Workspace vorhanden."
+fi
+
+# ──── Finale Verifikation
+TSC_BIN="${WS_BIN}/tsc"
+TSX_BIN="${WS_BIN}/tsx"
+VITE_BIN="${WS_BIN}/vite"
+PRISMA_BIN="${WS_BIN}/prisma"
+# Prisma kann auch direkt im Backend liegen
+[[ -x "$PRISMA_BIN" ]] || PRISMA_BIN="${BE_BIN}/prisma"
+[[ -x "$VITE_BIN"   ]] || VITE_BIN="${FE_BIN}/vite"
+
+[[ -x "$TSC_BIN"    ]] || die "tsc nicht gefunden"
+[[ -x "$TSX_BIN"    ]] || die "tsx nicht gefunden"
+[[ -x "$VITE_BIN"   ]] || die "vite nicht gefunden"
+[[ -x "$PRISMA_BIN" ]] || die "prisma nicht gefunden"
 
 ok "Alle Build-Tools OK:"
-info "  tsc    → $("${TSC_BIN}" --version)"
-info "  prisma → $("${PRISMA_BIN}" --version 2>/dev/null | head -1)"
-info "  vite   → $("${VITE_BIN}" --version)"
+info "  tsc    -> $("${TSC_BIN}" --version)"
+info "  prisma -> $("${PRISMA_BIN}" --version 2>/dev/null | head -1)"
+info "  vite   -> $("${VITE_BIN}" --version)"
 
 # ──── 10. Prisma schema
 step "Selecting Prisma schema for ${DB_TYPE}"
@@ -380,4 +440,4 @@ echo -e "  ${BOLD}Logs${NC}       journalctl -u notificationhub -f"
 echo -e "  ${BOLD}Config${NC}     ${ENV_FILE}"
 echo -e "  ${BOLD}Update${NC}     git -C ${INSTALL_DIR} pull && bash ${INSTALL_DIR}/install.sh"
 echo
-warn "Admin-Passwort nach dem ersten Login sofort ändern!"
+warn "Admin-Passwort nach dem ersten Login sofort aendern!"
