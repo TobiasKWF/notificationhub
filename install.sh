@@ -18,13 +18,10 @@ step()  { echo -e "\n${BOLD}${CYAN}==> $*${NC}"; }
 load_env() {
   local file="$1"
   while IFS= read -r line || [[ -n "$line" ]]; do
-    # Skip blank lines and comments
     [[ -z "$line" || "$line" == \#* ]] && continue
-    # Only process lines that look like KEY=VALUE
     if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
       local key="${line%%=*}"
       local val="${line#*=}"
-      # Strip surrounding quotes if present
       val="${val%\'}"; val="${val#\'}"
       val="${val%\"}"; val="${val#\"}"
       export "$key"="$val"
@@ -187,21 +184,33 @@ cd "$INSTALL_DIR"
 npm install --legacy-peer-deps --quiet
 ok "Dependencies installed."
 
-# ──── 9. Prisma generate (before tsc so @prisma/client types exist)
+# ──── 9. Select correct Prisma schema for the chosen DB
+step "Selecting Prisma schema for ${DB_TYPE}"
+PRISMA_DIR="${INSTALL_DIR}/packages/backend/prisma"
+if [[ "$DB_TYPE" == "mariadb" ]]; then
+  cp "${PRISMA_DIR}/schema.mysql.prisma" "${PRISMA_DIR}/schema.prisma"
+  info "Using MySQL/MariaDB schema."
+else
+  cp "${PRISMA_DIR}/schema.sqlite.prisma" "${PRISMA_DIR}/schema.prisma"
+  info "Using SQLite schema."
+fi
+ok "Prisma schema selected."
+
+# ──── 10. Prisma generate (before tsc so @prisma/client types exist)
 step "Generating Prisma client"
 load_env "$ENV_FILE"
 cd "${INSTALL_DIR}/packages/backend"
 npx prisma generate
 ok "Prisma client generated."
 
-# ──── 10. Build
+# ──── 11. Build
 step "Building backend + frontend"
 cd "$INSTALL_DIR"
 npm run build --workspace=packages/backend  --quiet
 npm run build --workspace=packages/frontend --quiet
 ok "Build complete."
 
-# ──── 11. Prisma migrate + seed
+# ──── 12. Prisma migrate + seed
 step "Running database migrations"
 cd "${INSTALL_DIR}/packages/backend"
 npx prisma migrate deploy
@@ -211,7 +220,7 @@ if ! npx prisma db seed 2>&1 | grep -q 'Admin already exists'; then
 fi
 cd "$INSTALL_DIR"
 
-# ──── 12. systemd service
+# ──── 13. systemd service
 step "Installing systemd service"
 _db_after="network.target"
 [[ "$DB_TYPE" == "mariadb" && "$INSTALL_MARIADB" == "1" ]] && _db_after="network.target mariadb.service"
@@ -250,7 +259,7 @@ systemctl enable --quiet notificationhub
 systemctl restart notificationhub
 ok "notificationhub.service enabled and started."
 
-# ──── 13. nginx
+# ──── 14. nginx
 step "Configuring nginx"
 SERVER_NAME=$(hostname -f 2>/dev/null || echo '_')
 cat > /etc/nginx/sites-available/notificationhub <<EOF
@@ -292,7 +301,7 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t -q && systemctl reload nginx
 ok "nginx configured."
 
-# ──── 14. Firewall
+# ──── 15. Firewall
 if command -v ufw &>/dev/null; then
   ufw allow 80/tcp &>/dev/null || true
   ufw allow 443/tcp &>/dev/null || true

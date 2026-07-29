@@ -1,13 +1,11 @@
-// NotificationHub – Prisma Schema
-// DEFAULT: SQLite (used by prisma generate / prisma studio without install.sh)
-// install.sh copies the correct schema (sqlite/mysql) before running prisma generate.
+// NotificationHub – Prisma Schema (MySQL / MariaDB)
 generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -47,9 +45,9 @@ model Notification {
   source           String
   service          String?
   title            String
-  message          String
+  message          String          @db.Text
   priority         String          @default("INFO")
-  tags             String          @default("[]")
+  tags             String          @default("[]")   @db.Text
   hostname         String?
   externalId       String?
   timestamp        DateTime        @default(now())
@@ -62,7 +60,7 @@ model Notification {
   incidentId       String?
   incident         Incident?       @relation(fields: [incidentId], references: [id])
   routingResults   RoutingResult[]
-  extra            String          @default("{}")
+  extra            String          @default("{}")   @db.Text
   @@index([source])
   @@index([priority])
   @@index([timestamp])
@@ -78,7 +76,7 @@ model RoutingResult {
   providerId     String
   provider       Provider     @relation(fields: [providerId], references: [id])
   status         String
-  error          String?
+  error          String?      @db.Text
   sentAt         DateTime     @default(now())
   @@map("routing_results")
 }
@@ -90,7 +88,7 @@ model Provider {
   name           String
   type           String
   isEnabled      Boolean         @default(true)
-  config         String          @default("{}")
+  config         String          @default("{}") @db.Text
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   routingResults RoutingResult[]
@@ -103,11 +101,11 @@ model Provider {
 model Rule {
   id             String          @id @default(uuid())
   name           String
-  description    String?
+  description    String?         @db.Text
   isEnabled      Boolean         @default(true)
   priority       Int             @default(100)
   stopProcessing Boolean         @default(false)
-  conditions     String          @default("[]")
+  conditions     String          @default("[]") @db.Text
   conditionLogic String          @default("AND")
   actions        RuleAction[]
   routingResults RoutingResult[]
@@ -121,7 +119,7 @@ model RuleAction {
   ruleId     String
   rule       Rule      @relation(fields: [ruleId], references: [id], onDelete: Cascade)
   type       String
-  config     String    @default("{}")
+  config     String    @default("{}") @db.Text
   sortOrder  Int       @default(0)
   providerId String?
   provider   Provider? @relation(fields: [providerId], references: [id])
@@ -147,7 +145,7 @@ model EscalationStep {
   stepNumber Int
   delayMins  Int              @default(10)
   providerId String
-  message    String?
+  message    String?          @db.Text
   @@map("escalation_steps")
 }
 
@@ -182,7 +180,7 @@ model Template {
   id        String   @id @default(uuid())
   name      String   @unique
   subject   String?
-  body      String
+  body      String   @db.Text
   isDefault Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -193,7 +191,7 @@ model Template {
 
 model Setting {
   key       String   @id
-  value     String
+  value     String   @db.Text
   updatedAt DateTime @updatedAt
   @@map("settings")
 }
@@ -206,7 +204,7 @@ model AuditLog {
   action     String
   resource   String
   resourceId String?
-  details    String   @default("{}")
+  details    String   @default("{}") @db.Text
   ip         String?
   createdAt  DateTime @default(now())
   @@index([userId])

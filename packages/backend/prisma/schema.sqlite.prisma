@@ -1,6 +1,4 @@
-// NotificationHub – Prisma Schema
-// DEFAULT: SQLite (used by prisma generate / prisma studio without install.sh)
-// install.sh copies the correct schema (sqlite/mysql) before running prisma generate.
+// NotificationHub – Prisma Schema (SQLite)
 generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
