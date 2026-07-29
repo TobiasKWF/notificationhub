@@ -1,0 +1,280 @@
+// NotificationHub – Prisma Schema
+// Supports SQLite (default) and PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users & Auth
+
+model User {
+  id           String     @id @default(uuid())
+  email        String     @unique
+  name         String
+  passwordHash String
+  role         UserRole   @default(VIEWER)
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  apiTokens    ApiToken[]
+  acknowledged Notification[] @relation("AcknowledgedBy")
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  OPERATOR
+  VIEWER
+  API_USER
+}
+
+model ApiToken {
+  id          String    @id @default(uuid())
+  name        String
+  tokenHash   String    @unique
+  tokenPrefix String
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+  @@map("api_tokens")
+}
+
+// ─── Notifications
+
+model Notification {
+  id               String          @id @default(uuid())
+  source           String
+  service          String?
+  title            String
+  message          String
+  priority         Priority        @default(INFO)
+  tags             String          @default("[]")
+  hostname         String?
+  externalId       String?
+  timestamp        DateTime        @default(now())
+  receivedAt       DateTime        @default(now())
+  acknowledgedAt   DateTime?
+  acknowledgedById String?
+  acknowledgedBy   User?           @relation("AcknowledgedBy", fields: [acknowledgedById], references: [id])
+  duplicateOf      String?
+  duplicateCount   Int             @default(1)
+  incidentId       String?
+  incident         Incident?       @relation(fields: [incidentId], references: [id])
+  routingResults   RoutingResult[]
+  extra            String          @default("{}")
+  @@index([source])
+  @@index([priority])
+  @@index([timestamp])
+  @@map("notifications")
+}
+
+enum Priority {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+  CRITICAL
+  EMERGENCY
+}
+
+model RoutingResult {
+  id             String        @id @default(uuid())
+  notificationId String
+  notification   Notification  @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  ruleId         String?
+  rule           Rule?         @relation(fields: [ruleId], references: [id])
+  providerId     String
+  provider       Provider      @relation(fields: [providerId], references: [id])
+  status         RoutingStatus
+  error          String?
+  sentAt         DateTime      @default(now())
+  @@map("routing_results")
+}
+
+enum RoutingStatus {
+  SENT
+  FAILED
+  SKIPPED
+  RATE_LIMITED
+  QUIET_HOURS
+}
+
+// ─── Providers
+
+model Provider {
+  id             String          @id @default(uuid())
+  name           String
+  type           ProviderType
+  isEnabled      Boolean         @default(true)
+  config         String          @default("{}")
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  routingResults RoutingResult[]
+  ruleActions    RuleAction[]
+  @@map("providers")
+}
+
+enum ProviderType {
+  NTFY
+  TELEGRAM
+  DISCORD
+  SLACK
+  EMAIL
+  PUSHBULLET
+  PUSHOVER
+  GOTIFY
+  MQTT
+  WEBHOOK
+  PLUGIN
+}
+
+// ─── Rules Engine
+
+model Rule {
+  id             String         @id @default(uuid())
+  name           String
+  description    String?
+  isEnabled      Boolean        @default(true)
+  priority       Int            @default(100)
+  stopProcessing Boolean        @default(false)
+  conditions     String         @default("[]")
+  conditionLogic ConditionLogic @default(AND)
+  actions        RuleAction[]
+  routingResults RoutingResult[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  @@map("rules")
+}
+
+enum ConditionLogic {
+  AND
+  OR
+}
+
+model RuleAction {
+  id         String     @id @default(uuid())
+  ruleId     String
+  rule       Rule       @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  type       ActionType
+  config     String     @default("{}")
+  sortOrder  Int        @default(0)
+  providerId String?
+  provider   Provider?  @relation(fields: [providerId], references: [id])
+  @@map("rule_actions")
+}
+
+enum ActionType {
+  FORWARD
+  DROP
+  STORE
+  MODIFY
+  ADD_TAG
+  REMOVE_TAG
+  DELAY
+  REPEAT
+  ESCALATE
+  MERGE
+  TRANSFORM
+  EXECUTE_WEBHOOK
+  MQTT_PUBLISH
+}
+
+// ─── Escalation
+
+model EscalationPolicy {
+  id        String           @id @default(uuid())
+  name      String
+  isEnabled Boolean          @default(true)
+  steps     EscalationStep[]
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  @@map("escalation_policies")
+}
+
+model EscalationStep {
+  id         String           @id @default(uuid())
+  policyId   String
+  policy     EscalationPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  stepNumber Int
+  delayMins  Int              @default(10)
+  providerId String
+  message    String?
+  @@map("escalation_steps")
+}
+
+model ActiveEscalation {
+  id               String    @id @default(uuid())
+  notificationId   String    @unique
+  policyId         String
+  currentStep      Int       @default(0)
+  nextEscalationAt DateTime
+  resolvedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  @@map("active_escalations")
+}
+
+// ─── Incidents
+
+model Incident {
+  id            String         @id @default(uuid())
+  title         String
+  status        IncidentStatus @default(OPEN)
+  priority      Priority       @default(ERROR)
+  notifications Notification[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  resolvedAt    DateTime?
+  @@map("incidents")
+}
+
+enum IncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+// ─── Templates
+
+model Template {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  subject   String?
+  body      String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@map("templates")
+}
+
+// ─── Settings
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+  @@map("settings")
+}
+
+// ─── Audit Log
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String
+  resource   String
+  resourceId String?
+  details    String   @default("{}")
+  ip         String?
+  createdAt  DateTime @default(now())
+  @@index([userId])
+  @@index([resource])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
