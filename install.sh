@@ -13,8 +13,7 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 die()   { echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
 step()  { echo -e "\n${BOLD}${CYAN}==> $*${NC}"; }
 
-# Safe .env loader: exports only KEY=VALUE lines, skips comments and blank lines.
-# Does NOT use 'source' to avoid shell-interpreting values like cron expressions.
+# Safe .env loader
 load_env() {
   local file="$1"
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -52,6 +51,9 @@ DB_NAME="${DB_NAME:-notificationhub}"
 DB_USER="${DB_USER:-notificationhub}"
 DB_PASS="${DB_PASS:-}"
 INSTALL_MARIADB="${INSTALL_MARIADB:-1}"
+
+# Exact Prisma v5 version to use throughout the install
+PRISMA_VERSION="5.22.0"
 
 if [[ -t 0 && -z "${DB_TYPE_SET:-}" ]]; then
   echo; echo -e "${BOLD}Database Backend${NC}"
@@ -178,26 +180,31 @@ else
   ADMIN_PASS_GENERATED=$(awk -F= '/^ADMIN_PASSWORD=/{sub(/^[^=]*=/,""); print; exit}' "${ENV_FILE}" | sed 's/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')
 fi
 
-# Load .env into current shell so all subsequent commands (prisma, node) have DATABASE_URL etc.
+# Load .env into current shell
 load_env "$ENV_FILE"
 
-# ──── 8. npm install (root workspace)
+# ──── 8. npm install
 step "Installing npm dependencies"
 cd "$INSTALL_DIR"
 npm install --legacy-peer-deps --quiet
-ok "Root dependencies installed."
+ok "Dependencies installed."
 
-# ──── 8b. npm install in backend package to ensure prisma v5 is local
+# ──── 8b. Pin prisma@5 explicitly in backend to prevent hoisting of wrong version
+step "Pinning Prisma ${PRISMA_VERSION} in backend"
 cd "${INSTALL_DIR}/packages/backend"
-npm install --legacy-peer-deps --quiet
-ok "Backend dependencies installed."
+npm install --save-dev --legacy-peer-deps "prisma@${PRISMA_VERSION}" --quiet
+npm install --save --legacy-peer-deps "@prisma/client@${PRISMA_VERSION}" --quiet
 
-# Local prisma binary – guaranteed to be v5 from the backend package.json
+# Resolve the binary – must exist now
 PRISMA_BIN="${INSTALL_DIR}/packages/backend/node_modules/.bin/prisma"
-[[ -x "$PRISMA_BIN" ]] || die "prisma binary not found at ${PRISMA_BIN} – npm install may have failed."
-info "Using prisma: $("${PRISMA_BIN}" --version | head -1)"
+if [[ ! -x "$PRISMA_BIN" ]]; then
+  # Last resort: use node to run the prisma package directly
+  PRISMA_BIN="node ${INSTALL_DIR}/packages/backend/node_modules/prisma/build/index.js"
+fi
+ok "Prisma ${PRISMA_VERSION} pinned."
+info "Prisma binary: ${PRISMA_BIN}"
 
-# ──── 9. Select correct Prisma schema for the chosen DB
+# ──── 9. Select correct Prisma schema
 step "Selecting Prisma schema for ${DB_TYPE}"
 PRISMA_DIR="${INSTALL_DIR}/packages/backend/prisma"
 if [[ "$DB_TYPE" == "mariadb" ]]; then
@@ -209,10 +216,10 @@ else
 fi
 ok "Prisma schema selected."
 
-# ──── 10. Prisma generate (before tsc so @prisma/client types exist)
+# ──── 10. Prisma generate
 step "Generating Prisma client"
 cd "${INSTALL_DIR}/packages/backend"
-"${PRISMA_BIN}" generate
+${PRISMA_BIN} generate
 ok "Prisma client generated."
 
 # ──── 11. Build
@@ -225,9 +232,9 @@ ok "Build complete."
 # ──── 12. Prisma migrate + seed
 step "Running database migrations"
 cd "${INSTALL_DIR}/packages/backend"
-"${PRISMA_BIN}" migrate deploy
+${PRISMA_BIN} migrate deploy
 ok "Migrations applied (${DB_TYPE})."
-if "${PRISMA_BIN}" db seed 2>&1 | grep -q 'Admin already exists'; then
+if ${PRISMA_BIN} db seed 2>&1 | grep -q 'Admin already exists'; then
   info "Admin user already exists – skipping seed."
 else
   ok "Database seeded."
