@@ -40,7 +40,7 @@ fi
 INSTALL_DIR="/opt/notificationhub"
 DATA_DIR="/var/lib/notificationhub"
 SERVICE_USER="notificationhub"
-PORT="${PORT:-3000}"
+PORT="${PORT:-3003}"
 NODE_MAJOR=22
 REPO_URL="https://github.com/TobiasKWF/notificationhub.git"
 GIT_BRANCH="${GIT_BRANCH:-main}"
@@ -178,6 +178,9 @@ else
   ADMIN_PASS_GENERATED=$(awk -F= '/^ADMIN_PASSWORD=/{sub(/^[^=]*=/,""); print; exit}' "${ENV_FILE}" | sed 's/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')
 fi
 
+# Load .env into current shell so all subsequent commands (prisma, node) have DATABASE_URL etc.
+load_env "$ENV_FILE"
+
 # ──── 8. npm install
 step "Installing npm dependencies"
 cd "$INSTALL_DIR"
@@ -198,7 +201,6 @@ ok "Prisma schema selected."
 
 # ──── 10. Prisma generate (before tsc so @prisma/client types exist)
 step "Generating Prisma client"
-load_env "$ENV_FILE"
 cd "${INSTALL_DIR}/packages/backend"
 npx prisma generate
 ok "Prisma client generated."
@@ -215,7 +217,9 @@ step "Running database migrations"
 cd "${INSTALL_DIR}/packages/backend"
 npx prisma migrate deploy
 ok "Migrations applied (${DB_TYPE})."
-if ! npx prisma db seed 2>&1 | grep -q 'Admin already exists'; then
+if npx prisma db seed 2>&1 | grep -q 'Admin already exists'; then
+  info "Admin user already exists – skipping seed."
+else
   ok "Database seeded."
 fi
 cd "$INSTALL_DIR"
