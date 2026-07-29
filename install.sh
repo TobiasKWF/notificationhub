@@ -13,6 +13,25 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 die()   { echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
 step()  { echo -e "\n${BOLD}${CYAN}==> $*${NC}"; }
 
+# Safe .env loader: exports only KEY=VALUE lines, skips comments and blank lines.
+# Does NOT use 'source' to avoid shell-interpreting values like cron expressions.
+load_env() {
+  local file="$1"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Skip blank lines and comments
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    # Only process lines that look like KEY=VALUE
+    if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+      local key="${line%%=*}"
+      local val="${line#*=}"
+      # Strip surrounding quotes if present
+      val="${val%\'}"; val="${val#\'}"
+      val="${val%\"}"; val="${val#\"}"
+      export "$key"="$val"
+    fi
+  done < "$file"
+}
+
 [[ $EUID -eq 0 ]] || die "Run as root (sudo bash install.sh)"
 
 if [[ -f /etc/os-release ]]; then
@@ -159,7 +178,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
   ADMIN_PASS_GENERATED="$ADMIN_PASS"
 else
   info ".env already exists – skipping."
-  ADMIN_PASS_GENERATED=$(grep '^ADMIN_PASSWORD' "${ENV_FILE}" | cut -d= -f2)
+  ADMIN_PASS_GENERATED=$(grep '^ADMIN_PASSWORD' "${ENV_FILE}" | cut -d= -f2 | tr -d '"\'')
 fi
 
 # ──── 8. npm install
@@ -168,9 +187,9 @@ cd "$INSTALL_DIR"
 npm install --legacy-peer-deps --quiet
 ok "Dependencies installed."
 
-# ──── 9. Prisma generate (MUST happen before tsc build so @prisma/client types exist)
+# ──── 9. Prisma generate (before tsc so @prisma/client types exist)
 step "Generating Prisma client"
-set -a; source "$ENV_FILE"; set +a
+load_env "$ENV_FILE"
 cd "${INSTALL_DIR}/packages/backend"
 npx prisma generate
 ok "Prisma client generated."
