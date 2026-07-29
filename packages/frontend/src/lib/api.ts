@@ -39,7 +39,10 @@ export const api = {
   getNotification: (id: string) => request<Notification>(`/notifications/${id}`),
   getStats: () => request<Stats>('/notifications/stats/summary'),
   acknowledgeNotification: (id: string) =>
-    request<Notification>(`/notifications/${id}/acknowledge`, { method: 'POST' }),
+    request<Notification>(`/notifications/${id}/acknowledge`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   bulkAcknowledge: (ids: string[]) =>
     request<{ acknowledged: number }>('/notifications/bulk/acknowledge', {
       method: 'POST', body: JSON.stringify({ ids }),
