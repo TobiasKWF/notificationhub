@@ -148,7 +148,6 @@ SQL
 
 elif [[ "$DB_TYPE" == "mariadb" && "$INSTALL_MARIADB" == "0" ]]; then
   step "Using external MariaDB at ${DB_HOST}:${DB_PORT}"
-  # Test connectivity
   if command -v mysql &>/dev/null; then
     if mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASS}" \
         -e "SELECT 1;" "${DB_NAME}" &>/dev/null; then
@@ -201,7 +200,6 @@ if [[ ! -f "$ENV_FILE" ]]; then
   APP_SECRET=$(openssl rand -hex 16)
   ADMIN_PASS=$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 16)
 
-  # Common
   sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${JWT_SECRET}|"           "$ENV_FILE"
   sed -i "s|^APP_SECRET=.*|APP_SECRET=${APP_SECRET}|"           "$ENV_FILE"
   sed -i "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=${ADMIN_PASS}|"   "$ENV_FILE"
@@ -209,7 +207,6 @@ if [[ ! -f "$ENV_FILE" ]]; then
   sed -i "s|^PORT=.*|PORT=${PORT}|"                             "$ENV_FILE"
   sed -i "s|^NODE_ENV=.*|NODE_ENV=production|"                  "$ENV_FILE"
 
-  # Database
   if [[ "$DB_TYPE" == "mariadb" ]]; then
     sed -i "s|^DATABASE_PROVIDER=.*|DATABASE_PROVIDER=mysql|"   "$ENV_FILE"
     sed -i "s|^DATABASE_URL=file.*|DATABASE_URL=mysql://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}?connection_limit=10|" "$ENV_FILE"
@@ -227,15 +224,14 @@ if [[ ! -f "$ENV_FILE" ]]; then
   ADMIN_PASS_GENERATED="$ADMIN_PASS"
 else
   info ".env already exists – skipping. Re-run with the file deleted to regenerate."
-  # Read existing admin password for summary
   ADMIN_PASS_GENERATED=$(grep '^ADMIN_PASSWORD' "${ENV_FILE}" | cut -d= -f2)
 fi
 
 # ──── 8. npm install + build ──────────────────────────────────────────────────────────────────────
 step "Installing npm dependencies"
 cd "$INSTALL_DIR"
-# Use npm install (not npm ci) – no package-lock.json committed to repo
-npm install --prefer-offline --quiet
+# --legacy-peer-deps: avoids conflicts from transitive peer deps (e.g. browserslist)
+npm install --legacy-peer-deps --quiet
 ok "Dependencies installed."
 
 step "Building backend + frontend"
@@ -247,15 +243,11 @@ ok "Build complete."
 step "Running database migrations"
 set -a; source "$ENV_FILE"; set +a
 
-# Generate Prisma client for the active provider
 cd "${INSTALL_DIR}/packages/backend"
 npx prisma generate
-
-# deploy = run pending migrations without interactive prompt
 npx prisma migrate deploy
 ok "Migrations applied (${DB_TYPE})."
 
-# Seed admin user and default settings
 if ! npx prisma db seed 2>&1 | grep -q 'Admin already exists'; then
   ok "Database seeded."
 fi
@@ -265,7 +257,6 @@ cd "$INSTALL_DIR"
 # ──── 10. systemd service ──────────────────────────────────────────────────────────────────────────
 step "Installing systemd service"
 
-# MariaDB dependency
 _db_after="network.target"
 [[ "$DB_TYPE" == "mariadb" && "$INSTALL_MARIADB" == "1" ]] && _db_after="network.target mariadb.service"
 
@@ -316,29 +307,24 @@ server {
     listen 80;
     server_name ${SERVER_NAME};
 
-    # Serve built frontend (Vite dist)
     root ${INSTALL_DIR}/packages/frontend/dist;
     index index.html;
 
-    # Gzip
     gzip on;
     gzip_vary on;
     gzip_types text/plain text/css application/javascript application/json image/svg+xml;
 
-    # Cache hashed assets
     location ~* \.(js|css|woff2?|png|svg|ico)\$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
         try_files \$uri =404;
     }
 
-    # Health endpoint
     location = /health {
         proxy_pass http://127.0.0.1:${PORT};
         proxy_set_header Host \$host;
     }
 
-    # WebSocket
     location /ws {
         proxy_pass http://127.0.0.1:${PORT};
         proxy_http_version 1.1;
@@ -348,7 +334,6 @@ server {
         proxy_read_timeout 86400;
     }
 
-    # API
     location /api/ {
         proxy_pass http://127.0.0.1:${PORT};
         proxy_http_version 1.1;
@@ -359,7 +344,6 @@ server {
         proxy_read_timeout 60s;
     }
 
-    # SPA fallback
     location / {
         try_files \$uri \$uri/ /index.html;
     }
@@ -394,6 +378,6 @@ echo -e "  ${BOLD}Database${NC}   ${DB_TYPE^^}$([ "$DB_TYPE" = 'mariadb' ] && ec
 echo
 echo -e "  ${BOLD}Logs${NC}       journalctl -u notificationhub -f"
 echo -e "  ${BOLD}Config${NC}     ${ENV_FILE}"
-echo -e "  ${BOLD}Update${NC}     git -C ${INSTALL_DIR} pull && systemctl restart notificationhub"
+echo -e "  ${BOLD}Update${NC}     git -C ${INSTALL_DIR} pull && npm install --legacy-peer-deps && systemctl restart notificationhub"
 echo
 warn "Change the admin password immediately after first login!"
