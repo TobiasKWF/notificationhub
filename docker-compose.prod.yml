@@ -1,49 +1,112 @@
-# NotificationHub – Production Docker Compose with PostgreSQL
-# Usage: docker compose -f docker-compose.prod.yml up -d
+# NotificationHub – Production Docker Compose
+# Includes MariaDB as external database
+#
+# Usage:
+#   cp .env.example .env   # then fill in JWT_SECRET etc.
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Ports exposed to host:
+#   80  / 443  – frontend (nginx, HTTP only here – put a reverse proxy / Traefik in front for TLS)
+#   3000       – backend (optional, disable if not needed externally)
 
 name: notificationhub-prod
 
 services:
-  app:
-    image: ghcr.io/tobiaskwf/notificationhub:latest
-    container_name: notificationhub
+
+  # ─────────────────────── MariaDB ────────────────────────
+  mariadb:
+    image: mariadb:11
+    container_name: notificationhub-mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD:     ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD is required}
+      MARIADB_DATABASE:          ${DB_NAME:-notificationhub}
+      MARIADB_USER:              ${DB_USER:-notificationhub}
+      MARIADB_PASSWORD:          ${DB_PASS:?DB_PASS is required}
+      MARIADB_CHARACTER_SET:     utf8mb4
+      MARIADB_COLLATION:         utf8mb4_unicode_ci
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      # Optional: place custom my.cnf overrides in ./docker/mariadb/
+      # - ./docker/mariadb/my.cnf:/etc/mysql/conf.d/notificationhub.cnf:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - internal
+    labels:
+      com.notificationhub.service: mariadb
+
+  # ─────────────────────── Backend ────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: notificationhub-backend
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${BACKEND_PORT:-3000}:3000"
     environment:
-      - NODE_ENV=production
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-notificationhub}:${POSTGRES_PASSWORD:-secret}@postgres:5432/${POSTGRES_DB:-notificationhub}
-      - JWT_SECRET=${JWT_SECRET}
-      - APP_SECRET=${APP_SECRET}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
+      NODE_ENV:          production
+      DATABASE_PROVIDER: mysql
+      DATABASE_URL:      mysql://${DB_USER:-notificationhub}:${DB_PASS}@mariadb:3306/${DB_NAME:-notificationhub}?connection_limit=10
+      JWT_SECRET:        ${JWT_SECRET:?JWT_SECRET is required}
+      APP_SECRET:        ${APP_SECRET:-change-me}
+      LOG_LEVEL:         ${LOG_LEVEL:-info}
+      MQTT_ENABLED:      ${MQTT_ENABLED:-false}
+      RETENTION_DAYS:    ${RETENTION_DAYS:-90}
+      ADMIN_EMAIL:       ${ADMIN_EMAIL:-admin@localhost}
+      ADMIN_PASSWORD:    ${ADMIN_PASSWORD:-changeme}
     depends_on:
-      postgres:
+      mariadb:
         condition: service_healthy
-    volumes:
-      - notificationhub_data:/app/data
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 30s
+      retries: 3
+      start_period: 20s
+    networks:
+      - internal
+    labels:
+      com.notificationhub.service: backend
 
-  postgres:
-    image: postgres:16-alpine
-    container_name: notificationhub-postgres
+  # ─────────────────────── Frontend ──────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: notificationhub-frontend
     restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-notificationhub}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
-      POSTGRES_DB: ${POSTGRES_DB:-notificationhub}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+      BACKEND_HOST: backend:3000
+    depends_on:
+      backend:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-notificationhub}"]
-      interval: 10s
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/"]
+      interval: 30s
       timeout: 5s
-      retries: 5
+      retries: 3
+      start_period: 10s
+    networks:
+      - internal
+      - external
+    labels:
+      com.notificationhub.service: frontend
+
+networks:
+  internal:
+    driver: bridge
+    internal: true    # MariaDB + Backend are NOT reachable from outside
+  external:
+    driver: bridge    # Frontend is reachable (port 80)
 
 volumes:
-  notificationhub_data:
-  postgres_data:
+  mariadb_data:
+    driver: local

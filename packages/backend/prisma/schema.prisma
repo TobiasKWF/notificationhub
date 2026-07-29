@@ -1,36 +1,35 @@
 // NotificationHub – Prisma Schema
-// Supports SQLite (default) and PostgreSQL
+// Supports SQLite (default/dev) and MySQL/MariaDB (production)
+//
+// Switch DB via DATABASE_PROVIDER env var:
+//   DATABASE_PROVIDER=sqlite   DATABASE_URL=file:./data/notificationhub.db
+//   DATABASE_PROVIDER=mysql    DATABASE_URL=mysql://user:pass@host:3306/notificationhub
 
 generator client {
   provider = "prisma-client-js"
+  // Generate both sqlite + mysql query engines for portability
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = env("DATABASE_PROVIDER")
   url      = env("DATABASE_URL")
 }
 
 // ─── Users & Auth
 
 model User {
-  id           String     @id @default(uuid())
-  email        String     @unique
+  id           String         @id @default(uuid())
+  email        String         @unique
   name         String
   passwordHash String
-  role         UserRole   @default(VIEWER)
-  isActive     Boolean    @default(true)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  role         String         @default("VIEWER")   // ADMIN | OPERATOR | VIEWER | API_USER
+  isActive     Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
   apiTokens    ApiToken[]
   acknowledged Notification[] @relation("AcknowledgedBy")
   @@map("users")
-}
-
-enum UserRole {
-  ADMIN
-  OPERATOR
-  VIEWER
-  API_USER
 }
 
 model ApiToken {
@@ -53,9 +52,9 @@ model Notification {
   source           String
   service          String?
   title            String
-  message          String
-  priority         Priority        @default(INFO)
-  tags             String          @default("[]")
+  message          String          @db.Text
+  priority         String          @default("INFO")   // INFO | SUCCESS | WARNING | ERROR | CRITICAL | EMERGENCY
+  tags             String          @default("[]")     @db.Text
   hostname         String?
   externalId       String?
   timestamp        DateTime        @default(now())
@@ -68,42 +67,25 @@ model Notification {
   incidentId       String?
   incident         Incident?       @relation(fields: [incidentId], references: [id])
   routingResults   RoutingResult[]
-  extra            String          @default("{}")
+  extra            String          @default("{}")     @db.Text
   @@index([source])
   @@index([priority])
   @@index([timestamp])
   @@map("notifications")
 }
 
-enum Priority {
-  INFO
-  SUCCESS
-  WARNING
-  ERROR
-  CRITICAL
-  EMERGENCY
-}
-
 model RoutingResult {
-  id             String        @id @default(uuid())
+  id             String       @id @default(uuid())
   notificationId String
-  notification   Notification  @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
   ruleId         String?
-  rule           Rule?         @relation(fields: [ruleId], references: [id])
+  rule           Rule?        @relation(fields: [ruleId], references: [id])
   providerId     String
-  provider       Provider      @relation(fields: [providerId], references: [id])
-  status         RoutingStatus
-  error          String?
-  sentAt         DateTime      @default(now())
+  provider       Provider     @relation(fields: [providerId], references: [id])
+  status         String       // SENT | FAILED | SKIPPED | RATE_LIMITED | QUIET_HOURS
+  error          String?      @db.Text
+  sentAt         DateTime     @default(now())
   @@map("routing_results")
-}
-
-enum RoutingStatus {
-  SENT
-  FAILED
-  SKIPPED
-  RATE_LIMITED
-  QUIET_HOURS
 }
 
 // ─── Providers
@@ -111,9 +93,9 @@ enum RoutingStatus {
 model Provider {
   id             String          @id @default(uuid())
   name           String
-  type           ProviderType
+  type           String          // NTFY | TELEGRAM | DISCORD | SLACK | EMAIL | MQTT | WEBHOOK | ...
   isEnabled      Boolean         @default(true)
-  config         String          @default("{}")
+  config         String          @default("{}") @db.Text
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   routingResults RoutingResult[]
@@ -121,69 +103,34 @@ model Provider {
   @@map("providers")
 }
 
-enum ProviderType {
-  NTFY
-  TELEGRAM
-  DISCORD
-  SLACK
-  EMAIL
-  PUSHBULLET
-  PUSHOVER
-  GOTIFY
-  MQTT
-  WEBHOOK
-  PLUGIN
-}
-
 // ─── Rules Engine
 
 model Rule {
-  id             String         @id @default(uuid())
+  id             String          @id @default(uuid())
   name           String
-  description    String?
-  isEnabled      Boolean        @default(true)
-  priority       Int            @default(100)
-  stopProcessing Boolean        @default(false)
-  conditions     String         @default("[]")
-  conditionLogic ConditionLogic @default(AND)
+  description    String?         @db.Text
+  isEnabled      Boolean         @default(true)
+  priority       Int             @default(100)
+  stopProcessing Boolean         @default(false)
+  conditions     String          @default("[]") @db.Text
+  conditionLogic String          @default("AND")  // AND | OR
   actions        RuleAction[]
   routingResults RoutingResult[]
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
   @@map("rules")
 }
 
-enum ConditionLogic {
-  AND
-  OR
-}
-
 model RuleAction {
-  id         String     @id @default(uuid())
+  id         String    @id @default(uuid())
   ruleId     String
-  rule       Rule       @relation(fields: [ruleId], references: [id], onDelete: Cascade)
-  type       ActionType
-  config     String     @default("{}")
-  sortOrder  Int        @default(0)
+  rule       Rule      @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  type       String    // FORWARD | DROP | STORE | MODIFY | ADD_TAG | ...
+  config     String    @default("{}") @db.Text
+  sortOrder  Int       @default(0)
   providerId String?
-  provider   Provider?  @relation(fields: [providerId], references: [id])
+  provider   Provider? @relation(fields: [providerId], references: [id])
   @@map("rule_actions")
-}
-
-enum ActionType {
-  FORWARD
-  DROP
-  STORE
-  MODIFY
-  ADD_TAG
-  REMOVE_TAG
-  DELAY
-  REPEAT
-  ESCALATE
-  MERGE
-  TRANSFORM
-  EXECUTE_WEBHOOK
-  MQTT_PUBLISH
 }
 
 // ─── Escalation
@@ -205,7 +152,7 @@ model EscalationStep {
   stepNumber Int
   delayMins  Int              @default(10)
   providerId String
-  message    String?
+  message    String?          @db.Text
   @@map("escalation_steps")
 }
 
@@ -225,19 +172,13 @@ model ActiveEscalation {
 model Incident {
   id            String         @id @default(uuid())
   title         String
-  status        IncidentStatus @default(OPEN)
-  priority      Priority       @default(ERROR)
+  status        String         @default("OPEN")  // OPEN | ACKNOWLEDGED | RESOLVED
+  priority      String         @default("ERROR") // uses Priority values
   notifications Notification[]
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   resolvedAt    DateTime?
   @@map("incidents")
-}
-
-enum IncidentStatus {
-  OPEN
-  ACKNOWLEDGED
-  RESOLVED
 }
 
 // ─── Templates
@@ -246,7 +187,7 @@ model Template {
   id        String   @id @default(uuid())
   name      String   @unique
   subject   String?
-  body      String
+  body      String   @db.Text
   isDefault Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -257,7 +198,7 @@ model Template {
 
 model Setting {
   key       String   @id
-  value     String
+  value     String   @db.Text
   updatedAt DateTime @updatedAt
   @@map("settings")
 }
@@ -270,7 +211,7 @@ model AuditLog {
   action     String
   resource   String
   resourceId String?
-  details    String   @default("{}")
+  details    String   @default("{}") @db.Text
   ip         String?
   createdAt  DateTime @default(now())
   @@index([userId])
