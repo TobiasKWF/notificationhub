@@ -187,8 +187,16 @@ cd "$INSTALL_DIR"
 npm install --legacy-peer-deps --quiet
 ok "Dependencies installed."
 
-# Local prisma binary – avoids npx pulling an incompatible global version (e.g. prisma v7)
-PRISMA_BIN="${INSTALL_DIR}/node_modules/.bin/prisma"
+# Resolve local prisma binary – in a workspace setup prisma lives in the backend package.
+# Using the local binary avoids npx pulling an incompatible global version (e.g. prisma v7).
+if [[ -x "${INSTALL_DIR}/packages/backend/node_modules/.bin/prisma" ]]; then
+  PRISMA_BIN="${INSTALL_DIR}/packages/backend/node_modules/.bin/prisma"
+elif [[ -x "${INSTALL_DIR}/node_modules/.bin/prisma" ]]; then
+  PRISMA_BIN="${INSTALL_DIR}/node_modules/.bin/prisma"
+else
+  die "Could not find local prisma binary after npm install. Check node_modules."
+fi
+info "Using prisma: ${PRISMA_BIN}"
 
 # ──── 9. Select correct Prisma schema for the chosen DB
 step "Selecting Prisma schema for ${DB_TYPE}"
