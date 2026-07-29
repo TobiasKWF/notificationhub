@@ -40,6 +40,14 @@ export const api = {
   getStats: () => request<Stats>('/notifications/stats/summary'),
   acknowledgeNotification: (id: string) =>
     request<Notification>(`/notifications/${id}/acknowledge`, { method: 'POST' }),
+  bulkAcknowledge: (ids: string[]) =>
+    request<{ acknowledged: number }>('/notifications/bulk/acknowledge', {
+      method: 'POST', body: JSON.stringify({ ids }),
+    }),
+  bulkDelete: (ids: string[]) =>
+    request<{ deleted: number }>('/notifications/bulk', {
+      method: 'DELETE', body: JSON.stringify({ ids }),
+    }),
   deleteNotification: (id: string) =>
     request<void>(`/notifications/${id}`, { method: 'DELETE' }),
 
@@ -49,6 +57,8 @@ export const api = {
     request<Rule>('/rules', { method: 'POST', body: JSON.stringify(data) }),
   updateRule: (id: string, data: unknown) =>
     request<Rule>(`/rules/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  toggleRule: (id: string) =>
+    request<Rule>(`/rules/${id}/toggle`, { method: 'PATCH' }),
   deleteRule: (id: string) =>
     request<void>(`/rules/${id}`, { method: 'DELETE' }),
 
@@ -88,15 +98,16 @@ export interface User {
 export interface Notification {
   id: string; source: string; service?: string; title: string; message: string;
   priority: string; tags: string; hostname?: string; timestamp: string;
-  acknowledgedAt?: string | null;
+  receivedAt?: string; acknowledgedAt?: string | null; duplicateCount?: number;
 }
 export interface NotificationListResponse {
   items: Notification[]; total: number; page: number; limit: number; pages: number;
 }
 export interface Stats {
-  today: number; critical: number; warnings: number;
+  today: number; week: number; critical: number; warnings: number;
+  unacknowledged: number;
   byPriority: { priority: string; _count: { id: number } }[];
-  bySource: { source: string; _count: { id: number } }[];
+  bySource:   { source: string;   _count: { id: number } }[];
 }
 export interface Rule {
   id: string; name: string; description?: string; isEnabled: boolean;
