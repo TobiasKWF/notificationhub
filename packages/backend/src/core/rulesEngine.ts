@@ -1,6 +1,6 @@
 /**
  * Core Rules Engine
- * Loads all active rules (ordered by priority), evaluates each rule’s conditions
+ * Loads all active rules (ordered by priority), evaluates each rule's conditions
  * against an incoming notification, and executes the matching actions.
  */
 import type { Notification, Rule, RuleAction, Provider } from '@prisma/client';
@@ -11,14 +11,24 @@ import { dispatchToProvider } from '../providers/index.js';
 type RuleWithActions = Rule & { actions: (RuleAction & { provider: Provider | null })[] };
 
 // ---------------------------------------------------------------------------
-// Condition evaluation
+// Condition types (exported for use in /test route)
 // ---------------------------------------------------------------------------
 
-type Condition = {
-  field: string;       // source | service | priority | hostname | title | message | tags | ...
-  operator: string;   // eq | neq | contains | not_contains | regex | in | gt | lt | exists
+export type ConditionOperator =
+  | 'eq' | 'neq' | 'contains' | 'not_contains'
+  | 'regex' | 'in' | 'gt' | 'lt' | 'exists';
+
+export type Condition = {
+  field: string;       // source | service | priority | hostname | title | message | tags | extra.*
+  operator: ConditionOperator;
   value: string | string[];
 };
+
+export type ConditionLogic = 'AND' | 'OR';
+
+// ---------------------------------------------------------------------------
+// Condition evaluation (exported for dry-run / test route)
+// ---------------------------------------------------------------------------
 
 function evaluateCondition(n: Notification, cond: Condition): boolean {
   const tags: string[] = JSON.parse(n.tags);
@@ -33,7 +43,7 @@ function evaluateCondition(n: Notification, cond: Condition): boolean {
       case 'message':  return n.message;
       case 'tags':     return tags;
       default:
-        try { return (JSON.parse(n.extra) as Record<string,string>)[cond.field]; }
+        try { return (JSON.parse(n.extra) as Record<string, string>)[cond.field]; }
         catch { return undefined; }
     }
   })();
@@ -44,31 +54,47 @@ function evaluateCondition(n: Notification, cond: Condition): boolean {
   const fv  = Array.isArray(fieldValue) ? fieldValue : [String(fieldValue)];
 
   switch (cond.operator) {
-    case 'eq':          return fv[0] === val;
-    case 'neq':         return fv[0] !== val;
-    case 'contains':    return fv.some(v => v.toLowerCase().includes(val.toLowerCase()));
-    case 'not_contains':return !fv.some(v => v.toLowerCase().includes(val.toLowerCase()));
+    case 'eq':           return fv[0] === val;
+    case 'neq':          return fv[0] !== val;
+    case 'contains':     return fv.some(v => v.toLowerCase().includes(val.toLowerCase()));
+    case 'not_contains': return !fv.some(v => v.toLowerCase().includes(val.toLowerCase()));
     case 'regex': {
       try { return new RegExp(val).test(fv.join(' ')); } catch { return false; }
     }
     case 'in':
       return Array.isArray(cond.value)
         ? (cond.value as string[]).includes(fv[0])
-        : val.split(',').map(s=>s.trim()).includes(fv[0]);
-    case 'gt':          return Number(fv[0]) > Number(val);
-    case 'lt':          return Number(fv[0]) < Number(val);
-    case 'exists':      return fv.length > 0 && fv[0] !== '';
-    default:            return false;
+        : val.split(',').map(s => s.trim()).includes(fv[0]);
+    case 'gt':    return Number(fv[0]) > Number(val);
+    case 'lt':    return Number(fv[0]) < Number(val);
+    case 'exists':return fv.length > 0 && fv[0] !== '';
+    default:      return false;
   }
 }
 
+/**
+ * Evaluate a list of conditions against a notification.
+ * Exported so the /api/v1/rules/:id/test route can do a dry-run.
+ *
+ * @param conditions  Array of Condition objects
+ * @param logic       'AND' | 'OR' (default: 'AND')
+ * @param notification  Full Notification or partial test payload cast to Notification
+ */
+export function evaluateConditions(
+  conditions: Condition[],
+  logic: ConditionLogic = 'AND',
+  notification: Notification,
+): boolean {
+  if (conditions.length === 0) return true; // no conditions = match all
+  return logic === 'AND'
+    ? conditions.every(c => evaluateCondition(notification, c))
+    : conditions.some(c  => evaluateCondition(notification, c));
+}
+
+/** @internal Used by processNotification — wraps evaluateConditions with parsed rule data */
 function evaluateRule(n: Notification, rule: Rule): boolean {
   const conditions: Condition[] = JSON.parse(rule.conditions);
-  if (conditions.length === 0) return true; // no conditions = match all
-
-  return rule.conditionLogic === 'AND'
-    ? conditions.every(c => evaluateCondition(n, c))
-    : conditions.some(c  => evaluateCondition(n, c));
+  return evaluateConditions(conditions, rule.conditionLogic as ConditionLogic, n);
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +106,7 @@ async function executeAction(
   notification: Notification,
   ruleId: string,
 ): Promise<void> {
-  const config = JSON.parse(action.config) as Record<string,unknown>;
+  const config = JSON.parse(action.config) as Record<string, unknown>;
 
   switch (action.type) {
     case 'DROP':
@@ -88,7 +114,7 @@ async function executeAction(
       return;
 
     case 'STORE':
-      // Already stored on ingestion — no-op unless we want a separate store
+      // Already stored on ingestion — no-op
       return;
 
     case 'FORWARD':
@@ -110,7 +136,7 @@ async function executeAction(
     }
 
     case 'MODIFY': {
-      const update: Record<string,unknown> = {};
+      const update: Record<string, unknown> = {};
       if (config.priority) update.priority = config.priority;
       if (config.title)    update.title    = config.title;
       if (Object.keys(update).length)
@@ -119,7 +145,6 @@ async function executeAction(
     }
 
     case 'ESCALATE':
-      // Escalation policy ID in config.policyId – handled by escalation job
       logger.info({ notificationId: notification.id, policy: config.policyId }, 'Escalation triggered');
       return;
 
@@ -147,7 +172,7 @@ async function loadRules(): Promise<RuleWithActions[]> {
   return cachedRules;
 }
 
-export function invalidateRulesCache() {
+export function invalidateRulesCache(): void {
   cachedRules = null;
 }
 

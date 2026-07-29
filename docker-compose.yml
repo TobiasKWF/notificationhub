@@ -1,23 +1,31 @@
 # NotificationHub – Development Docker Compose
 # Usage: docker compose up
+#
+# Services:
+#   backend  – Fastify API + SQLite (port 3000)
+#   frontend – nginx serving the built Vite app (port 80)
+#
+# The frontend container proxies /api and /ws to the backend.
 
 name: notificationhub
 
 services:
-  app:
+  backend:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    container_name: notificationhub
+    container_name: notificationhub-backend
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
-      - NODE_ENV=production
-      - DATABASE_URL=file:./data/notificationhub.db
-      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
-      - APP_SECRET=${APP_SECRET:-change-me-in-production}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
+      NODE_ENV:      production
+      DATABASE_URL:  file:./data/notificationhub.db
+      JWT_SECRET:    ${JWT_SECRET:-change-me-in-production}
+      APP_SECRET:    ${APP_SECRET:-change-me-in-production}
+      LOG_LEVEL:     ${LOG_LEVEL:-info}
+      MQTT_ENABLED:  ${MQTT_ENABLED:-false}
+      RETENTION_DAYS: ${RETENTION_DAYS:-90}
     volumes:
       - notificationhub_data:/app/data
     healthcheck:
@@ -25,9 +33,32 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 15s
+    labels:
+      com.notificationhub.service: backend
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: notificationhub-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    environment:
+      # nginx template uses this to proxy /api and /ws to the backend container
+      BACKEND_HOST: backend:3000
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
       start_period: 10s
     labels:
-      - "com.notificationhub.description=NotificationHub notification routing engine"
+      com.notificationhub.service: frontend
 
 volumes:
   notificationhub_data:
