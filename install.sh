@@ -27,13 +27,9 @@ load_env() {
   done < "$file"
 }
 
-# Findet eine Binary in mehreren moeglichen Pfaden
 find_binary() {
-  local name="$1"
-  shift
-  for p in "$@"; do
-    [[ -x "$p" ]] && { echo "$p"; return 0; }
-  done
+  local name="$1"; shift
+  for p in "$@"; do [[ -x "$p" ]] && { echo "$p"; return 0; }; done
   return 1
 }
 
@@ -189,105 +185,35 @@ fi
 
 load_env "$ENV_FILE"
 
-# ──── 8. Alle Build-Tools in /root vorinstallieren
-step "Pre-installing all build tools into /root/node_modules"
-cd /root
-npm install \
-  typescript tsx \
-  vite @vitejs/plugin-react \
-  "prisma@${PRISMA_VERSION}" "@prisma/client@${PRISMA_VERSION}" \
-  2>&1 | grep -v '^npm warn' || true
-
-ROOT_BIN="/root/node_modules/.bin"
-[[ -x "${ROOT_BIN}/tsc"    ]] || die "typescript konnte nicht in /root installiert werden"
-[[ -x "${ROOT_BIN}/tsx"    ]] || die "tsx konnte nicht in /root installiert werden"
-[[ -x "${ROOT_BIN}/vite"   ]] || die "vite konnte nicht in /root installiert werden"
-[[ -x "${ROOT_BIN}/prisma" ]] || die "prisma konnte nicht in /root installiert werden"
-ok "Build tools verfuegbar: tsc $(${ROOT_BIN}/tsc --version)."
-
-# ──── 9. Projekt-Dependencies (sauber)
-step "Installing project dependencies (clean)"
+# ──── 8. Projekt-Dependencies
+# Schritt 8 installiert keine globalen Build-Tools mehr – npm run build nutzt
+# das lokale node_modules/.bin jedes Packages mit korrektem PATH.
+step "Installing all project dependencies"
 cd "$INSTALL_DIR"
 rm -rf node_modules packages/backend/node_modules packages/frontend/node_modules
-npm install --legacy-peer-deps
-ok "Project dependencies installed."
+npm install --legacy-peer-deps 2>&1 | grep -v '^npm warn' || true
 
-# ──── 9b. devDependencies explizit im Backend installieren
+# devDependencies explizit in Backend und Frontend installieren.
 # npm-Workspaces hoisten devDeps von Sub-Packages nicht immer zuverlaessig.
-# Das stellt sicher dass @types/bcryptjs, @types/nodemailer, etc. vorhanden sind.
-step "Installing backend devDependencies explicitly"
 cd "${INSTALL_DIR}/packages/backend"
 npm install --legacy-peer-deps --include=dev 2>&1 | grep -v '^npm warn' || true
-ok "Backend devDependencies installed."
 
-# ──── 9c. Fehlende Binaries in workspace .bin/ aufloesen
-step "Resolving missing build binaries"
-WS_BIN="${INSTALL_DIR}/node_modules/.bin"
-FE_BIN="${INSTALL_DIR}/packages/frontend/node_modules/.bin"
-BE_BIN="${INSTALL_DIR}/packages/backend/node_modules/.bin"
-mkdir -p "${WS_BIN}"
+cd "${INSTALL_DIR}/packages/frontend"
+npm install --legacy-peer-deps --include=dev 2>&1 | grep -v '^npm warn' || true
 
-for binary in tsc tsx; do
-  if [[ ! -x "${WS_BIN}/${binary}" ]]; then
-    ln -sf "${ROOT_BIN}/${binary}" "${WS_BIN}/${binary}"
-    info "${binary}: Symlink gesetzt (${ROOT_BIN}/${binary})"
-  else
-    info "${binary}: bereits vorhanden."
-  fi
-done
+cd "$INSTALL_DIR"
+ok "All dependencies installed."
 
-# vite: Frontend-Package zuerst
-if [[ ! -x "${WS_BIN}/vite" ]]; then
-  VITE_SRC=$(find_binary "vite" "${FE_BIN}/vite" "${BE_BIN}/vite" "${ROOT_BIN}/vite") || true
-  if [[ -n "${VITE_SRC:-}" ]]; then
-    ln -sf "$VITE_SRC" "${WS_BIN}/vite"
-    info "vite: Symlink gesetzt (${VITE_SRC})"
-  else
-    info "vite nicht gefunden, installiere im Frontend-Package..."
-    cd "${INSTALL_DIR}/packages/frontend"
-    npm install --legacy-peer-deps vite @vitejs/plugin-react
-    cd "$INSTALL_DIR"
-    ln -sf "${FE_BIN}/vite" "${WS_BIN}/vite"
-    info "vite: Symlink gesetzt (${FE_BIN}/vite)"
-  fi
-else
-  info "vite: bereits vorhanden."
-fi
+# ──── 8b. Prisma binary finden
+# Nach dem echten npm install liegt prisma im Workspace oder Backend.
+PRISMA_BIN=$(
+  find_binary "prisma" \
+    "${INSTALL_DIR}/node_modules/.bin/prisma" \
+    "${INSTALL_DIR}/packages/backend/node_modules/.bin/prisma" \
+) || die "prisma binary nicht gefunden nach npm install"
+info "prisma -> ${PRISMA_BIN}"
 
-# prisma
-if [[ ! -x "${WS_BIN}/prisma" ]]; then
-  PRISMA_SRC=$(find_binary "prisma" "${BE_BIN}/prisma" "${ROOT_BIN}/prisma") || true
-  if [[ -n "${PRISMA_SRC:-}" ]]; then
-    ln -sf "$PRISMA_SRC" "${WS_BIN}/prisma"
-    info "prisma: Symlink gesetzt (${PRISMA_SRC})"
-  else
-    cd "$INSTALL_DIR"
-    npm install --legacy-peer-deps "prisma@${PRISMA_VERSION}"
-    ln -sf "${ROOT_BIN}/prisma" "${WS_BIN}/prisma"
-  fi
-else
-  info "prisma: bereits vorhanden."
-fi
-
-# ──── Finale Verifikation
-TSC_BIN="${WS_BIN}/tsc"
-TSX_BIN="${WS_BIN}/tsx"
-VITE_BIN="${WS_BIN}/vite"
-PRISMA_BIN="${WS_BIN}/prisma"
-[[ -x "$PRISMA_BIN" ]] || PRISMA_BIN="${BE_BIN}/prisma"
-[[ -x "$VITE_BIN"   ]] || VITE_BIN="${FE_BIN}/vite"
-
-[[ -x "$TSC_BIN"    ]] || die "tsc nicht gefunden"
-[[ -x "$TSX_BIN"    ]] || die "tsx nicht gefunden"
-[[ -x "$VITE_BIN"   ]] || die "vite nicht gefunden"
-[[ -x "$PRISMA_BIN" ]] || die "prisma nicht gefunden"
-
-ok "Alle Build-Tools OK:"
-info "  tsc    -> $("${TSC_BIN}" --version)"
-info "  prisma -> $("${PRISMA_BIN}" --version 2>/dev/null | head -1)"
-info "  vite   -> $("${VITE_BIN}" --version)"
-
-# ──── 10. Prisma schema
+# ──── 9. Prisma schema
 step "Selecting Prisma schema for ${DB_TYPE}"
 PRISMA_DIR="${INSTALL_DIR}/packages/backend/prisma"
 if [[ "$DB_TYPE" == "mariadb" ]]; then
@@ -299,22 +225,24 @@ else
 fi
 ok "Prisma schema selected."
 
-# ──── 11. Prisma generate
+# ──── 10. Prisma generate
 step "Generating Prisma client"
 cd "${INSTALL_DIR}/packages/backend"
 "${PRISMA_BIN}" generate
 ok "Prisma client generated."
 
-# ──── 12. Build
+# ──── 11. Build Backend
+# npm run build setzt PATH=$package/node_modules/.bin:$workspace/node_modules/.bin
+# Damit findet tsc das lokale typescript + alle @types korrekt.
 step "Building backend"
 cd "${INSTALL_DIR}/packages/backend"
-"${TSC_BIN}" -p tsconfig.json
+npm run build 2>&1
 ok "Backend compiled."
 
+# ──── 12. Build Frontend
 step "Building frontend"
 cd "${INSTALL_DIR}/packages/frontend"
-"${TSC_BIN}" -p tsconfig.json --noEmit
-"${VITE_BIN}" build
+npm run build 2>&1
 ok "Frontend built."
 
 # ──── 13. DB migrate + seed
