@@ -4,19 +4,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev":            "tsx watch src/index.ts",
-    "build":          "tsc -p tsconfig.json",
+    "dev":            "../../node_modules/.bin/tsx watch src/index.ts",
+    "build":          "../../node_modules/.bin/tsc -p tsconfig.json",
     "start":          "node dist/index.js",
-    "typecheck":      "tsc --noEmit",
-    "test":           "vitest run",
-    "db:generate":    "prisma generate",
-    "db:migrate":     "prisma migrate deploy",
-    "db:migrate:dev": "prisma migrate dev",
-    "db:studio":      "prisma studio",
-    "db:seed":        "tsx src/db/seed.ts"
+    "typecheck":      "../../node_modules/.bin/tsc --noEmit",
+    "test":           "../../node_modules/.bin/vitest run",
+    "db:generate":    "../../node_modules/.bin/prisma generate",
+    "db:migrate":     "../../node_modules/.bin/prisma migrate deploy",
+    "db:migrate:dev": "../../node_modules/.bin/prisma migrate dev",
+    "db:studio":      "../../node_modules/.bin/prisma studio",
+    "db:seed":        "../../node_modules/.bin/tsx src/db/seed.ts"
   },
   "prisma": {
-    "seed": "tsx src/db/seed.ts"
+    "seed": "../../node_modules/.bin/tsx src/db/seed.ts"
   },
   "dependencies": {
     "@fastify/cors":        "^9.0.1",
