@@ -234,7 +234,8 @@ fi
 # ──── 8. npm install + build ──────────────────────────────────────────────────────────────────────
 step "Installing npm dependencies"
 cd "$INSTALL_DIR"
-npm ci --prefer-offline --quiet
+# Use npm install (not npm ci) – no package-lock.json committed to repo
+npm install --prefer-offline --quiet
 ok "Dependencies installed."
 
 step "Building backend + frontend"
