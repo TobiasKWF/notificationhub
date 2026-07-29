@@ -187,6 +187,9 @@ cd "$INSTALL_DIR"
 npm install --legacy-peer-deps --quiet
 ok "Dependencies installed."
 
+# Local prisma binary – avoids npx pulling an incompatible global version (e.g. prisma v7)
+PRISMA_BIN="${INSTALL_DIR}/node_modules/.bin/prisma"
+
 # ──── 9. Select correct Prisma schema for the chosen DB
 step "Selecting Prisma schema for ${DB_TYPE}"
 PRISMA_DIR="${INSTALL_DIR}/packages/backend/prisma"
@@ -202,7 +205,7 @@ ok "Prisma schema selected."
 # ──── 10. Prisma generate (before tsc so @prisma/client types exist)
 step "Generating Prisma client"
 cd "${INSTALL_DIR}/packages/backend"
-npx prisma generate
+"${PRISMA_BIN}" generate
 ok "Prisma client generated."
 
 # ──── 11. Build
@@ -215,9 +218,9 @@ ok "Build complete."
 # ──── 12. Prisma migrate + seed
 step "Running database migrations"
 cd "${INSTALL_DIR}/packages/backend"
-npx prisma migrate deploy
+"${PRISMA_BIN}" migrate deploy
 ok "Migrations applied (${DB_TYPE})."
-if npx prisma db seed 2>&1 | grep -q 'Admin already exists'; then
+if "${PRISMA_BIN}" db seed 2>&1 | grep -q 'Admin already exists'; then
   info "Admin user already exists – skipping seed."
 else
   ok "Database seeded."
