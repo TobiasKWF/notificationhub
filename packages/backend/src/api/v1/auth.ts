@@ -21,7 +21,20 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   /** POST /api/v1/auth/login */
   app.post('/login', async (req, reply) => {
     try {
-      const body = LoginSchema.parse(req.body);
+      // Fastify parses JSON automatically when Content-Type: application/json.
+      // If body is still null/string, parse manually as fallback.
+      let rawBody: unknown = req.body;
+      if (typeof rawBody === 'string') {
+        try { rawBody = JSON.parse(rawBody); } catch { /* ignore */ }
+      }
+      if (rawBody === null || rawBody === undefined) {
+        logger.warn({ headers: req.headers, body: req.body }, 'Login: body is null/undefined');
+        return reply.status(400).send({ error: 'Request body is missing. Send Content-Type: application/json.' });
+      }
+
+      logger.info({ contentType: req.headers['content-type'], bodyType: typeof rawBody }, 'Login attempt');
+
+      const body = LoginSchema.parse(rawBody);
 
       let user: any;
       try {
@@ -48,6 +61,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       });
     } catch (err: any) {
       if (err instanceof ZodError) {
+        logger.warn({ zodErrors: err.errors, body: req.body }, 'Login ZodError');
         return reply.status(400).send({ error: 'Invalid request: ' + err.errors.map(e => e.message).join(', ') });
       }
       logger.error({ err }, 'Unexpected login error');
@@ -84,7 +98,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ success: true });
   });
 
-  /** POST /api/v1/auth/logout – client-side only (stateless JWT), just audit */
+  /** POST /api/v1/auth/logout */
   app.post('/logout', { onRequest: auth }, async (req, reply) => {
     const { sub } = req.user as { sub: string };
     auditLog({ userId: sub, action: 'logout', resource: 'auth', ip: req.ip });
